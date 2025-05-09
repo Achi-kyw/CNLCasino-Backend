@@ -1,201 +1,230 @@
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, render_template, request
-from flask_socketio import SocketIO, emit, join_room, leave_room, send
-import eventlet # 或者 gevent
-eventlet.monkey_patch() # 或者 gevent.monkey.patch_all() 放在最前面
+from flask_socketio import SocketIO, emit, join_room, leave_room as sio_leave_room
+import uuid # 用於生成唯一的房間 ID
 
-# 從 game_logic.py 導入遊戲狀態和函式
-from game_logic import GAME_ROOM, add_player_to_game, remove_player_from_game, \
-                       start_new_round, handle_player_action, handle_showdown_or_win_by_fold, \
-                       get_active_players_sids_in_order # (以及其他你需要的函式)
-
+# from games.game_factory import create_game_instance # 如果使用工廠模式
+from games.texas_holdem.logic import TexasHoldemGame # 直接導入或透過工廠
+# from games.blackjack.logic import BlackjackGame
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your_secret_key_here!' # 非常重要，請修改
-# cors_allowed_origins="*" 允許所有來源，開發時方便，生產環境應指定具體來源
+app.config['SECRET_KEY'] = 'your_very_secret_multi_game_key!'
 socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 
-# --- 遊戲房間設定 (單房間) ---
-SINGLE_ROOM_ID = "texas_holdem_room"
+active_rooms = {} # room_id -> GameInstance (例如 TexasHoldemGame 的實例)
 
-def get_game_state_for_player(player_sid=None):
-    """
-    產生要傳送給前端的遊戲狀態。
-    player_sid: 如果提供，則包含該玩家的私有手牌。
-    """
-    state = {
-        'players': [], # 公開的玩家資訊
-        'community_cards': GAME_ROOM['community_cards'],
-        'pot': GAME_ROOM['pot'],
-        'current_turn_sid': GAME_ROOM['current_turn_sid'],
-        'current_bet_to_match': GAME_ROOM['current_bet_to_match'],
-        'game_phase': GAME_ROOM['game_phase'],
-        'game_in_progress': GAME_ROOM['game_in_progress'],
-        'dealer_sid': None, # 需要實現按鈕位邏輯來填充
-        'last_action': None, # (可選) 上一個動作的描述
-        'min_raise': GAME_ROOM.get('min_raise', GAME_ROOM.get('big_blind', 20)*2) # 確保有值
-    }
-
-    # 填充按鈕位玩家 SID
-    player_sids_all = list(GAME_ROOM['players'].keys())
-    if player_sids_all and GAME_ROOM['game_in_progress']:
-        dealer_actual_sid = player_sids_all[GAME_ROOM['dealer_button_idx'] % len(player_sids_all)]
-        state['dealer_sid'] = dealer_actual_sid
-
-
-    for sid, player_data in GAME_ROOM['players'].items():
-        public_player_data = {
-            'sid': sid,
-            'name': player_data['name'],
-            'chips': player_data['chips'],
-            'current_bet': player_data['current_bet'],
-            'is_active': player_data['is_active'], # 是否參與本局
-            'has_acted': player_data['has_acted_this_round'] # 本輪是否已行動
-        }
-        if player_sid == sid and GAME_ROOM['game_in_progress']: # 只給當前玩家看自己的手牌
-            public_player_data['hand'] = player_data.get('hand', [])
-        elif GAME_ROOM['game_phase'] == 'showdown' and player_data['is_active']: # 攤牌時顯示所有參與攤牌者的手牌
-             public_player_data['hand'] = player_data.get('hand', [])
-        state['players'].append(public_player_data)
-
-    return state
-
-def broadcast_game_state(message=None, event_name='game_update'):
-    """廣播當前遊戲狀態給房間內所有玩家"""
-    print(f"Broadcasting state for event: {event_name}")
-    # 對每個連接的客戶端，單獨準備他們的狀態 (因為手牌是私有的)
-    for sid_in_room in GAME_ROOM['players'].keys(): # 只廣播給在遊戲邏輯中註冊的玩家
-        if request and request.sid == sid_in_room : # 如果是當前請求的發起者，他會直接收到emit的回應
-             pass # emit to room already handles this
-        player_specific_state = get_game_state_for_player(sid_in_room)
-        if message:
-            player_specific_state['message'] = message
-        socketio.emit(event_name, player_specific_state, room=sid_in_room) # 單獨發送給每個玩家
-    print(f"State broadcasted. Current pot: {GAME_ROOM['pot']}, Phase: {GAME_ROOM['game_phase']}")
-
+# 遊戲類型註冊 (如果不使用工廠，可以在這裡手動管理)
+REGISTERED_GAME_LOGIC = {
+    "texas_holdem": TexasHoldemGame,
+    # "blackjack": BlackjackGame,
+}
 
 @app.route('/')
 def index():
-    # (可選) 提供一個簡單的前端頁面
-    return render_template('index.html')
+    # 可以是一個顯示可用房間列表或創建房間選項的頁面
+    return render_template('index.html', rooms=active_rooms) # 傳遞房間資訊給模板
 
 @socketio.on('connect')
 def handle_connect():
-    sid = request.sid
-    print(f"Client connected: {sid}")
-    # 立即將玩家加入房間，但還不加入遊戲邏輯中的玩家列表
-    join_room(SINGLE_ROOM_ID)
-    emit('message', {'text': f"Welcome! You are connected with SID: {sid}"})
-    # 可以發送當前房間人數等資訊
-    # emit('room_status', {'num_players': len(GAME_ROOM['players'])}) # 這裡GAME_ROOM可能還沒此玩家
-
+    print(f"Client connected: {request.sid}")
+    emit('message', {'text': f"Welcome! You are connected with SID: {request.sid}"})
 
 @socketio.on('disconnect')
 def handle_disconnect():
     sid = request.sid
     print(f"Client disconnected: {sid}")
-    player_name = GAME_ROOM['players'].get(sid, {}).get('name', sid)
-    was_removed = remove_player_from_game(sid)
-    leave_room(SINGLE_ROOM_ID) # 確保從 SocketIO 房間離開
-    if was_removed:
-        print(f"Player {player_name} removed from game.")
-        broadcast_game_state(message=f"Player {player_name} has left.")
-        # 如果遊戲正在進行且玩家數不足，可能需要結束遊戲
-        if GAME_ROOM['game_in_progress'] and len(get_active_players_sids_in_order()) < 2:
-            print("Not enough players to continue, ending game.")
-            # 這裡可以調用一個函數來處理遊戲提前結束，例如將底池分配給剩餘玩家
-            showdown_results = handle_showdown_or_win_by_fold()
-            broadcast_game_state(message="Game ended due to player leaving.", event_name='game_over')
-            socketio.emit('showdown_result', showdown_results, room=SINGLE_ROOM_ID)
-            GAME_ROOM['game_in_progress'] = False
+    # 遍歷所有房間，如果玩家在某個房間中，則將其移除
+    room_to_leave = None
+    game_instance_of_player = None
+    for r_id, game_inst in list(active_rooms.items()): # 使用 list(active_rooms.items()) 以允許在迭代中删除元素
+        if sid in game_inst.players:
+            room_to_leave = r_id
+            game_instance_of_player = game_inst
+            break
+
+    if game_instance_of_player and room_to_leave:
+        print(f"Player {sid} was in room {room_to_leave}. Removing.")
+        result = game_instance_of_player.remove_player(sid) # 遊戲內部處理移除邏輯並廣播
+        sio_leave_room(room_to_leave) # SocketIO層面的離開房間
+
+        if result == "ROOM_EMPTY" or game_instance_of_player.get_player_count() == 0:
+            # 如果遊戲內部邏輯表示房間空了，或者實際玩家數為0
+            if not game_instance_of_player.is_game_in_progress : # 確保遊戲沒在進行才清理
+                print(f"Room {room_to_leave} is now empty and game not in progress. Removing from active_rooms.")
+                del active_rooms[room_to_leave]
+            elif game_instance_of_player.get_player_count() == 0 and game_instance_of_player.is_game_in_progress:
+                print(f"Room {room_to_leave} is empty but game was in progress. Forcing end.")
+                # 強制結束遊戲，例如清空底池，遊戲實例內部應處理這種情況
+                game_instance_of_player.end_game({"message": "All players left, game ended."})
+                if room_to_leave in active_rooms: #再次確認
+                    del active_rooms[room_to_leave]
 
 
-@socketio.on('join_game')
-def handle_join_game(data):
+    # 更新大廳資訊 (如果有的話)
+    socketio.emit('lobby_update', {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}, broadcast=True)
+
+
+@socketio.on('create_room')
+def handle_create_room(data):
+    """
+    玩家請求創建一個新遊戲房間。
+    data = {'game_type': 'texas_holdem', 'player_name': 'Alice', 'options': {'buy_in': 500}}
+    """
     sid = request.sid
-    player_name = data.get('name', f"Player_{sid[:4]}")
+    player_name = data.get('player_name', f"Player_{sid[:4]}")
+    game_type = data.get('game_type')
+    options = data.get('options', {}) # 遊戲的特定選項
 
-    if sid in GAME_ROOM['players']:
-        emit('error_message', {'message': 'You are already in the game.'})
-        # 重新發送一次狀態給他，以防萬一
-        player_state = get_game_state_for_player(sid)
-        emit('game_update', player_state)
+    if not game_type or game_type not in REGISTERED_GAME_LOGIC:
+        emit('error_message', {'message': f"Invalid game type: {game_type}"})
         return
 
-    if add_player_to_game(sid, player_name):
-        print(f"Player {player_name} ({sid}) joined the game room: {SINGLE_ROOM_ID}")
-        # 向所有玩家廣播更新後的遊戲狀態 (包括新玩家)
-        broadcast_game_state(message=f"Player {player_name} has joined.")
-    else:
-        emit('error_message', {'message': 'Failed to join game (already in list, should not happen).'})
+    room_id = str(uuid.uuid4())[:8] # 生成一個唯一的房間 ID
+    game_class = REGISTERED_GAME_LOGIC[game_type]
+    # 創建遊戲實例時傳入 socketio 實例
+    game_instance = game_class(room_id, [sid], socketio, options) # 創建者自動加入
+    game_instance.add_player(sid, {'name': player_name}) # 確保創建者被正確加入其內部玩家列表
+
+    active_rooms[room_id] = game_instance
+    join_room(room_id) # Flask-SocketIO 的加入房間
+
+    print(f"Room {room_id} (Type: {game_type}) created by {player_name} ({sid}). Options: {options}")
+    emit('room_created', {'room_id': room_id, 'game_type': game_type, 'options': options, 'creator_sid': sid}, room=room_id)
+    # 向創建者發送一次完整的遊戲狀態
+    game_instance.broadcast_state(specific_sid=sid)
+    # 更新大廳資訊
+    socketio.emit('lobby_update', {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}, broadcast=True)
 
 
-@socketio.on('start_game_request')
-def handle_start_game_request():
+@socketio.on('join_room_request') # 改名以區分 SocketIO 的 join_room
+def handle_join_room_request(data):
+    """
+    玩家請求加入一個已存在的遊戲房間。
+    data = {'room_id': 'xxxx', 'player_name': 'Bob'}
+    """
     sid = request.sid
-    if not GAME_ROOM['game_in_progress']:
-        if len(GAME_ROOM['players']) >= 2: # 至少需要2個玩家
-            print(f"Start game request from {sid}. Starting new round...")
-            if start_new_round(): # game_logic 中的函式
-                broadcast_game_state(message="New round started!")
-            else:
-                emit('error_message', {'message': 'Failed to start game (not enough active players with chips).'})
-                broadcast_game_state() # 廣播一下當前狀態
-        else:
-            emit('error_message', {'message': 'Not enough players to start the game. Need at least 2.'})
-            print(f"Start game failed: not enough players. Count: {len(GAME_ROOM['players'])}")
-    else:
-        emit('error_message', {'message': 'Game is already in progress.'})
-        # 也許只發送當前狀態給請求者
-        player_state = get_game_state_for_player(sid)
-        emit('game_update', player_state)
+    player_name = data.get('player_name', f"Player_{sid[:4]}")
+    room_id = data.get('room_id')
 
-
-@socketio.on('player_action')
-def on_player_action(data):
-    sid = request.sid
-    action = data.get('action') # 'fold', 'check', 'call', 'bet', 'raise'
-    amount = data.get('amount', 0)
-
-    if not GAME_ROOM['game_in_progress']:
-        emit('error_message', {'message': 'Game is not in progress.'})
+    if room_id not in active_rooms:
+        emit('error_message', {'message': "Room not found."})
         return
 
-    if GAME_ROOM['current_turn_sid'] != sid:
-        emit('error_message', {'message': "It's not your turn."})
-        # 仍然發送一次狀態，讓客戶端同步
-        player_state = get_game_state_for_player(sid)
-        emit('game_update', player_state)
+    game_instance = active_rooms[room_id]
+
+    if game_instance.is_game_in_progress and not game_instance.options.get('allow_join_in_progress', False):
+        emit('error_message', {'message': "Game is in progress and does not allow new players."})
         return
 
-    print(f"Player {GAME_ROOM['players'].get(sid,{}).get('name')} ({sid}) action: {action}, amount: {amount}")
-    action_result = handle_player_action(sid, action, amount) # game_logic 中的函式
+    if sid in game_instance.players:
+        emit('error_message', {'message': "You are already in this room."})
+        join_room(room_id) # 確保仍在SocketIO房間
+        game_instance.broadcast_state(specific_sid=sid) # 發送當前狀態
+        return
 
-    if action_result and action_result.get('success'):
-        last_action_description = f"{GAME_ROOM['players'][sid]['name']} {action}"
-        if action in ['bet', 'raise', 'call'] and action_result.get('amount', 0) > 0:
-            last_action_description += f" {action_result.get('amount')}"
+    # TODO: 檢查房間是否已滿 (根據 game_instance.options.get('max_players'))
 
-        if GAME_ROOM['game_phase'] == 'showdown': # 遊戲因棄牌或 all-in 結束
-            print("Game ended or moved to showdown due to player action.")
-            showdown_results = handle_showdown_or_win_by_fold() # 確保執行攤牌邏輯
-            broadcast_game_state(message=last_action_description, event_name='game_over') # 可能用 game_over 事件
-            socketio.emit('showdown_result', showdown_results, room=SINGLE_ROOM_ID) # 單獨發送攤牌結果
-            GAME_ROOM['game_in_progress'] = False # 確保標記結束
-        else:
-            broadcast_game_state(message=last_action_description)
-    else:
-        error_msg = action_result.get('message', "Invalid action.")
-        emit('error_message', {'message': error_msg})
-        # 重新發送遊戲狀態以同步前端
-        player_state = get_game_state_for_player(sid)
-        emit('game_update', player_state)
+    join_room(room_id) # Flask-SocketIO 的加入房間
+    game_instance.add_player(sid, {'name': player_name}) # 遊戲邏輯處理新增玩家並廣播
 
-    print(f"After action, pot: {GAME_ROOM['pot']}, phase: {GAME_ROOM['game_phase']}, turn: {GAME_ROOM['current_turn_sid']}")
+    print(f"Player {player_name} ({sid}) joined room {room_id}.")
+    # game_instance 內部會在 add_player 時廣播狀態，這裡不需要額外廣播給所有人
+    # 但可以給剛加入的玩家發送一個確認訊息
+    emit('joined_room_success', {'room_id': room_id, 'game_type': game_instance.get_game_type()}, room=sid)
+    # 更新大廳資訊
+    socketio.emit('lobby_update', {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}, broadcast=True)
+
+
+@socketio.on('leave_room_request')
+def handle_leave_room_request(data):
+    sid = request.sid
+    room_id = data.get('room_id')
+
+    if room_id not in active_rooms:
+        emit('error_message', {'message': "Room not found to leave."})
+        return
+
+    game_instance = active_rooms[room_id]
+    if sid not in game_instance.players:
+        # 可能玩家已經因為 disconnect 被移除了，但還是執行一下 sio_leave_room
+        sio_leave_room(room_id)
+        emit('message', {'text': "You were not actively in the game part of this room."})
+        return
+
+    print(f"Player {sid} requesting to leave room {room_id}.")
+    result = game_instance.remove_player(sid) # 遊戲內部處理移除並廣播
+    sio_leave_room(room_id) # SocketIO 層面離開
+
+    emit('left_room_success', {'room_id': room_id}, room=sid)
+
+    if result == "ROOM_EMPTY" or game_instance.get_player_count() == 0:
+        if not game_instance.is_game_in_progress:
+            print(f"Room {room_id} is now empty after player left. Removing.")
+            if room_id in active_rooms: del active_rooms[room_id] # 清理房間
+            # 更新大廳資訊
+            socketio.emit('lobby_update', {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}, broadcast=True)
+
+
+@socketio.on('start_game_request') # 通用的開始遊戲請求
+def handle_start_game_request(data):
+    """
+    data = {'room_id': 'xxxx'}
+    """
+    sid = request.sid
+    room_id = data.get('room_id')
+
+    if room_id not in active_rooms:
+        emit('error_message', {'message': "Room not found."})
+        return
+
+    game_instance = active_rooms[room_id]
+    # TODO: 可以增加權限檢查，例如只有房主或達到一定人數才能開始遊戲
+    game_instance.start_game(triggering_player_sid=sid) # 遊戲實例內部會廣播
+
+@socketio.on('get_lobby_info')
+def handle_get_lobby_info():
+    sid = request.sid
+    print(f"Client {sid} requested lobby info.")
+    # 直接發送當前的房間列表給請求的客戶端
+    lobby_data = {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items() if game}} # 確保 game 實例存在
+    emit('lobby_update', lobby_data, room=sid) # 只發送給請求者
+    print(f"Sent lobby_update to {sid}: {lobby_data}")
+
+@socketio.on('game_action') # 通用的遊戲動作事件
+def on_game_action(data):
+    """
+    data = {
+        'room_id': 'xxxx',
+        'action_type': 'fold' (或 'bet', 'hit', 'stand' 等),
+        'payload': {'amount': 100} (可選的動作數據)
+    }
+    """
+    sid = request.sid
+    room_id = data.get('room_id')
+    action_type = data.get('action_type')
+    payload = data.get('payload', {})
+
+    if not room_id or room_id not in active_rooms:
+        emit('error_message', {'message': 'Room not found for action.'})
+        return
+
+    game_instance = active_rooms[room_id]
+    if sid not in game_instance.players:
+        emit('error_message', {'message': 'You are not a player in this game room.'})
+        return
+
+    print(f"Room {room_id}: Player {sid} action: {action_type} with payload: {payload}")
+    # 將動作轉發給對應的遊戲實例處理
+    action_result = game_instance.handle_action(sid, action_type, payload)
+
+    # game_instance.handle_action 內部應該會調用 broadcast_state 或 send_error_to_player
+    # 如果 action_result 有特定回饋給該玩家，可以在這裡處理
+    if action_result and isinstance(action_result, dict) and action_result.get('private_feedback'):
+        emit(f"{game_instance.get_game_type()}_action_feedback", action_result['private_feedback'], room=sid)
 
 
 if __name__ == '__main__':
-    print("Starting Flask-SocketIO server...")
-    # host='0.0.0.0' 讓區域網路內其他裝置可以訪問
-    # debug=True 只在開發時使用
-    socketio.run(app, host='0.0.0.0', port=4000, debug=True, use_reloader=True)
-    # 注意：use_reloader=True 在 eventlet/gevent 下可能不穩定或行為異常，生產環境應設為 False
+    print("Starting Multi-Game Flask-SocketIO server...")
+    socketio.run(app, host='0.0.0.0', port=4000, debug=True)
