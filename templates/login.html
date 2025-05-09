@@ -6,35 +6,32 @@
     <title></title>
     <meta name="description" content="" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta
-      name="google-signin-client_id"
-      content="94161592009-6s68o1o65g5cqim5n7d6vehm8323r01b.apps.googleusercontent.com"
-    />
     <link rel="stylesheet" href="" />
   </head>
   <body>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <div id="g_id_onload"
+         data-client_id="94161592009-6s68o1o65g5cqim5n7d6vehm8323r01b.apps.googleusercontent.com"
+         data-callback="handleCredentialResponse">
+    </div>
+    <div class="g_id_signin" data-type="standard"></div>
     <script>
-      function onSignIn(googleUser) {
-        var profile = googleUser.getBasicProfile();
-        console.log("ID: " + profile.getId()); // Do not send to your backend! Use an ID token instead.
-        console.log("Name: " + profile.getName());
-        console.log("Image URL: " + profile.getImageUrl());
-        console.log("Email: " + profile.getEmail()); // This is null if the 'email' scope is not present.
-
-        var id_token = googleUser.getAuthResponse().id_token;
+      function handleCredentialResponse(CredentialResponse) {
+        // console.log("Signin")
+        console.log(CredentialResponse)
+        // console.log(CredentialResponse.credential)
+        var id_token = CredentialResponse.credential;
         var xhr = new XMLHttpRequest();
         xhr.open("POST", "http://localhost:4000/tokensignin");
         xhr.setRequestHeader(
           "Content-Type",
           "application/x-www-form-urlencoded"
         );
-        xhr.onload = function () {
-          console.log("Signed in as: " + xhr.responseText);
-        };
+        //xhr.onload = function () {
+        //  console.log("Signed in as: " + xhr.responseText);
+        //};
         xhr.send("idtoken=" + id_token);
       }
     </script>
-    <div class="g-signin2" data-onsuccess="onSignIn"></div>
-    <script src="https://apis.google.com/js/platform.js" async defer></script>
   </body>
 </html>
