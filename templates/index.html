@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Poker Test</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; }
+        #game-info { margin-right: 20px; border: 1px solid #ccc; padding: 10px; min-width: 300px;}
+        #player-cards { margin-top: 10px; }
+        #community-cards { margin-top: 10px; }
+        #actions button { margin: 5px; }
+        #players div { padding: 2px; }
+        .current-turn { font-weight: bold; background-color: yellow; }
+        pre { white-space: pre-wrap; word-wrap: break-word; background-color: #f0f0f0; padding: 10px; }
+    </style>
+</head><body>
+
+<div id="connection">
+    <input type="text" id="playerName" placeholder="Your Name">
+    <button id="joinGame">Join Game</button>
+    <p>My SID: <span id="mySid"></span></p>
+    <p>Status: <span id="status">Not Connected</span></p>
+</div>
+<hr>
+
+<div id="game-controls" style="display:none;">
+    <button id="startGame">Start Game</button>
+    <h3>Game Info:</h3>
+    <div id="game-info">
+        <p>Phase: <span id="gamePhase">---</span></p>
+        <p>Pot: <span id="pot">0</span></p>
+        <p>Current Bet to Match: <span id="currentBetToMatch">0</span></p>
+        <p>Min Raise To: <span id="minRaise">0</span></p>
+        <p>Dealer: <span id="dealerSid">---</span></p>
+        <p>Turn: <span id="currentTurn">---</span></p>
+        <div id="community-cards">Community: </div>
+        <h4>My Hand:</h4>
+        <div id="my-hand"></div>
+    </div>
+
+    <h3>Players:</h3>
+    <div id="players"></div>
+
+    <h3>Actions:</h3>
+    <div id="actions" style="display:none;">
+        <button data-action="fold">Fold</button>
+        <button data-action="check">Check</button>
+        <button data-action="call">Call</button>
+        <input type="number" id="betAmount" placeholder="Amount" value="20">
+        <button data-action="bet">Bet</button>
+        <button data-action="raise">Raise</button>
+    </div>
+</div>
+
+<h3>Log:</h3>
+<pre id="log"></pre>
+
+
+<script>
+    // 連接到你的 Flask-SocketIO 後端
+    // 如果你的 Flask 運行在不同地址或端口，請修改這裡
+    const socket = io('http://' + document.domain + ':' + location.port);
+    let mySid = null;
+    let myPlayerName = '';
+
+    function addToLog(message) {
+        const log = document.getElementById('log');
+        if (typeof message === 'object') {
+            log.textContent = JSON.stringify(message, null, 2) + '\n' + log.textContent;
+        } else {
+            log.textContent = message + '\n' + log.textContent;
+        }
+        if (log.textContent.length > 2000) { // Keep log from growing too large
+            log.textContent = log.textContent.substring(0, 2000) + "...";
+        }
+    }
+
+    socket.on('connect', () => {
+        mySid = socket.id;
+        document.getElementById('mySid').textContent = mySid;
+        document.getElementById('status').textContent = 'Connected!';
+        addToLog('Connected to server. My SID: ' + mySid);
+    });
+
+    socket.on('disconnect', () => {
+        document.getElementById('status').textContent = 'Disconnected!';
+        addToLog('Disconnected from server.');
+        document.getElementById('game-controls').style.display = 'none';
+        document.getElementById('connection').style.display = 'block';
+    });
+
+    socket.on('message', (data) => {
+        addToLog('Server: ' + (data.text || JSON.stringify(data)));
+    });
+
+    socket.on('error_message', (data) => {
+        addToLog('Error: ' + data.message);
+        alert('Error: ' + data.message);
+    });
+
+    socket.on('game_update', (state) => {
+        addToLog('Game Update Received:');
+        addToLog(state);
+
+        document.getElementById('gamePhase').textContent = state.game_phase || '---';
+        document.getElementById('pot').textContent = state.pot || 0;
+        document.getElementById('currentBetToMatch').textContent = state.current_bet_to_match || 0;
+        document.getElementById('minRaise').textContent = state.min_raise || 0;
+        document.getElementById('dealerSid').textContent = state.dealer_sid ? (getPlayerName(state.players, state.dealer_sid) + ` (${state.dealer_sid.substring(0,4)})`) : '---';
+
+
+        const communityDiv = document.getElementById('community-cards');
+        communityDiv.innerHTML = 'Community: ';
+        if (state.community_cards && state.community_cards.length > 0) {
+            state.community_cards.forEach(card => {
+                communityDiv.innerHTML += `${card.rank}${card.suit} `;
+            });
+        }
+
+        const playersDiv = document.getElementById('players');
+        playersDiv.innerHTML = '';
+        state.players.forEach(player => {
+            const playerDiv = document.createElement('div');
+            playerDiv.id = `player-${player.sid}`;
+            let playerText = `${player.name} (${player.sid.substring(0,4)}): Chips: ${player.chips}, Bet: ${player.current_bet}`;
+            if (!player.is_active && state.game_in_progress) playerText += " (Folded/Out)";
+            if (player.sid === mySid && player.hand && player.hand.length > 0) {
+                document.getElementById('my-hand').textContent = `My Hand: ${player.hand.map(c => c.rank + c.suit).join(' ')}`;
+            }
+            if (player.sid === state.current_turn_sid) {
+                playerDiv.classList.add('current-turn');
+                document.getElementById('currentTurn').textContent = `${player.name} (${player.sid.substring(0,4)})`;
+            }
+            playerDiv.textContent = playerText;
+            playersDiv.appendChild(playerDiv);
+        });
+
+        if (state.players.length === 0) { // No players yet
+            document.getElementById('currentTurn').textContent = '---';
+        }
+
+
+        // 顯示/隱藏操作按鈕
+        const actionsDiv = document.getElementById('actions');
+        if (state.game_in_progress && state.current_turn_sid === mySid) {
+            actionsDiv.style.display = 'block';
+            // 根據遊戲狀態啟用/禁用按鈕 (例如: 如果 current_bet_to_match > 0, 禁用 check, 啟用 call)
+            const callButton = document.querySelector('#actions button[data-action="call"]');
+            const checkButton = document.querySelector('#actions button[data-action="check"]');
+            const betButton = document.querySelector('#actions button[data-action="bet"]');
+            const raiseButton = document.querySelector('#actions button[data-action="raise"]');
+
+            let myPlayerData = state.players.find(p => p.sid === mySid);
+            let currentBetForMe = myPlayerData ? myPlayerData.current_bet : 0;
+
+
+            if (state.current_bet_to_match > currentBetForMe) { // Need to call a bet
+                checkButton.disabled = true;
+                betButton.disabled = true; // Cannot bet, must call or raise
+                callButton.disabled = false;
+                raiseButton.disabled = false;
+                callButton.textContent = `Call ${state.current_bet_to_match - currentBetForMe}`;
+            } else { // Can check or bet
+                checkButton.disabled = false;
+                betButton.disabled = false;
+                callButton.disabled = true; // No bet to call
+                raiseButton.disabled = (state.current_bet_to_match === 0); // Can only raise if there's an initial bet or BB
+                callButton.textContent = 'Call';
+            }
+             // 如果是BB且沒人加注，pre-flop最後一個行動者(BB)可以raise
+            if(state.game_phase === 'pre-flop' && state.current_bet_to_match === state.players.find(p=>p.sid === mySid)?.current_bet && state.current_bet_to_match > 0) {
+                // This is the big blind and action has come back around without a raise. BB has option to raise.
+                raiseButton.disabled = false;
+            }
+
+
+        } else {
+            actionsDiv.style.display = 'none';
+        }
+
+        if (state.message) {
+            addToLog("Game Message: " + state.message);
+        }
+    });
+
+    socket.on('showdown_result', (data) => {
+        addToLog('Showdown Result:');
+        addToLog(data);
+        let resultText = "Showdown!\nCommunity Cards: " + data.community_cards.map(c => c.rank + c.suit).join(' ') + "\n";
+        if (data.all_hands_at_showdown) {
+             resultText += "All hands at showdown:\n";
+             data.all_hands_at_showdown.forEach(p => {
+                resultText += `  ${p.name}: ${p.hand.map(c => c.rank + c.suit).join(' ')} (${p.eval})\n`;
+             });
+        }
+        data.winners.forEach(winner => {
+            resultText += `Winner: ${winner.name} with ${winner.best_hand_description} (${winner.hand.map(c => c.rank + c.suit).join(' ')}) wins ${winner.amount_won}\n`;
+        });
+        alert(resultText);
+        document.getElementById('my-hand').textContent = ''; // Clear hand for next round
+    });
+
+    document.getElementById('joinGame').addEventListener('click', () => {
+        myPlayerName = document.getElementById('playerName').value || 'Player_' + mySid.substring(0,4);
+        if (myPlayerName) {
+            socket.emit('join_game', { name: myPlayerName });
+            document.getElementById('game-controls').style.display = 'block';
+            document.getElementById('connection').style.display = 'none';
+            addToLog(`Attempting to join game as ${myPlayerName}`);
+        }
+    });
+
+    document.getElementById('startGame').addEventListener('click', () => {
+        addToLog('Requesting to start game...');
+        socket.emit('start_game_request');
+    });
+
+    document.getElementById('actions').addEventListener('click', (event) => {
+        if (event.target.tagName === 'BUTTON') {
+            const action = event.target.dataset.action;
+            let payload = { action: action };
+            if (action === 'bet' || action === 'raise') {
+                const amount = parseInt(document.getElementById('betAmount').value);
+                if (isNaN(amount) || amount <= 0) {
+                    alert('Please enter a valid amount.');
+                    return;
+                }
+                payload.amount = amount;
+            }
+            addToLog(`Sending action: ${action} with amount ${payload.amount || ''}`);
+            socket.emit('player_action', payload);
+        }
+    });
+
+    function getPlayerName(players, sid) {
+        const player = players.find(p => p.sid === sid);
+        return player ? player.name : 'Unknown';
+    }
+
+</script>
+</body>
+</html>
