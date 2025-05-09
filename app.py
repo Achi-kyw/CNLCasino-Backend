@@ -12,7 +12,6 @@ from games.texas_holdem.logic import TexasHoldemGame # 直接導入或透過工�
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_very_secret_multi_game_key!'
-CORS(app, resources={r"/tokensignin": {"origins": ["http://localhost:*", "https://*.apps.googleusercontent.com"]}})  # Restrict CORS origins
 socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 
 active_rooms = {} # room_id -> GameInstance (例如 TexasHoldemGame 的實例)
@@ -27,38 +26,6 @@ REGISTERED_GAME_LOGIC = {
 def index():
     # 可以是一個顯示可用房間列表或創建房間選項的頁面
     return render_template('login.html', rooms=active_rooms) # 傳遞房間資訊給模板
-
-@app.route('/tokensignin', methods=['POST'])
-def token_signin():
-    from google.oauth2 import id_token
-    from google.auth.transport import requests
-    CLIENT_ID = "94161592009-6s68o1o65g5cqim5n7d6vehm8323r01b.apps.googleusercontent.com"
-
-    # 從 application/x-www-form-urlencoded 請求中獲取 idtoken
-    id_token = request.form.get('idtoken')
-
-    if not id_token:
-        return {'error': 'idtoken is required'}, 400
-
-    try:
-        # Specify the CLIENT_ID of the app that accesses the backend:
-        idinfo = id_token.verify_oauth2_token(id_token, requests.Request(), CLIENT_ID)
-
-        # Or, if multiple clients access the backend server:
-        # idinfo = id_token.verify_oauth2_token(token, requests.Request())
-        # if idinfo['aud'] not in [CLIENT_ID_1, CLIENT_ID_2, CLIENT_ID_3]:
-        #     raise ValueError('Could not verify audience.')
-
-        # If the request specified a Google Workspace domain
-        # if idinfo['hd'] != DOMAIN_NAME:
-        #     raise ValueError('Wrong domain name.')
-
-        # ID token is valid. Get the user's Google Account ID from the decoded token.
-        userid = idinfo['sub']
-        print(idinfo)
-    except ValueError:
-        # Invalid token
-        return {'error': 'Invalid idtoken'}, 401
 
 @socketio.on('connect')
 def handle_connect():
