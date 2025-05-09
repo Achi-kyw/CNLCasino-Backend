@@ -2,3 +2,5 @@ Flask
 Flask-SocketIO
 python-socketio[client]  # 如果你的後端也需要作為 client 連接其他 socketio server (通常不用)
 eventlet  # 或 gevent，用於高效處理並行
+google-auth
+flask-cors
