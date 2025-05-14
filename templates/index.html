@@ -74,8 +74,7 @@
                 <p>公共牌: <span id="communityCards">---</span></p>
                 <p>輪到: <span id="currentPlayerTurn">---</span></p>
                 <p>當前需跟注: <span id="currentBetToMatch">0</span></p>
-                <p>最小加注至: <span id="minRaiseAmount">0</span></p>
-            </div>
+                <p>最小加注額(增量): <span id="minRaiseIncrementDisplay">0</span></p> </div>
 
             <div class="player-hand">
                 <h3>我的手牌</h3>
@@ -106,74 +105,66 @@
     </div>
 
     <script>
-        const socket = io('http://' + document.domain + ':' + location.port); // 假設與 Flask 在同源
+        const socket = io('http://' + document.domain + ':' + location.port); 
         let mySid = null;
         let currentPlayerName = '';
         let currentRoomId = null;
         let currentGameType = null;
+        let currentGameStateForClient = {}; // 保存一份最新的遊戲狀態
 
-        // UI 元素
         const connectionSetupDiv = document.getElementById('connection-setup');
         const lobbyDiv = document.getElementById('lobby');
         const gameRoomViewDiv = document.getElementById('game-room-view');
-
         const connectButton = document.getElementById('connectButton');
         const playerNameInput = document.getElementById('playerName');
         const mySidDisplay = document.getElementById('mySid');
         const connectionStatusDisplay = document.getElementById('connectionStatus');
-
         const createRoomButton = document.getElementById('createRoomButton');
         const gameTypeSelect = document.getElementById('gameType');
         const roomListDiv = document.getElementById('roomList');
-
         const roomTitleH2 = document.getElementById('room-title');
         const leaveRoomButton = document.getElementById('leaveRoomButton');
         const startGameButton = document.getElementById('startGameButton');
-
         const currentGamePhaseDisplay = document.getElementById('currentGamePhase');
         const potDisplay = document.getElementById('pot');
         const communityCardsDisplay = document.getElementById('communityCards');
         const currentPlayerTurnDisplay = document.getElementById('currentPlayerTurn');
         const currentBetToMatchDisplay = document.getElementById('currentBetToMatch');
-        const minRaiseAmountDisplay = document.getElementById('minRaiseAmount');
+        const minRaiseIncrementDisplay = document.getElementById('minRaiseIncrementDisplay'); // 改為 min_next_raise_increment
         const myHandDisplay = document.getElementById('myHandDisplay');
         const playersDisplayDiv = document.getElementById('players-display');
         const gameActionsPanel = document.getElementById('game-actions-panel');
         const actionAmountInput = document.getElementById('actionAmount');
-
         const logArea = document.getElementById('log-area');
 
-        // --- 日誌函式 ---
         function addToLog(message, type = 'info') {
             const time = new Date().toLocaleTimeString();
             const logEntry = document.createElement('p');
             logEntry.textContent = `[${time}] ${type === 'error' ? 'ERROR: ' : ''}${message}`;
             if (type === 'error') logEntry.style.color = 'red';
-            logArea.insertBefore(logEntry, logArea.firstChild); // 新消息在最上面
-            if (logArea.childElementCount > 50) { // 限制日誌數量
+            logArea.insertBefore(logEntry, logArea.firstChild); 
+            if (logArea.childElementCount > 50) { 
                 logArea.removeChild(logArea.lastChild);
             }
         }
 
-        // --- UI 更新函式 ---
         function showView(viewName) {
             connectionSetupDiv.classList.add('hidden');
             lobbyDiv.classList.add('hidden');
             gameRoomViewDiv.classList.add('hidden');
-
             if (viewName === 'connection') connectionSetupDiv.classList.remove('hidden');
             else if (viewName === 'lobby') lobbyDiv.classList.remove('hidden');
             else if (viewName === 'game-room') gameRoomViewDiv.classList.remove('hidden');
         }
 
         function updateRoomList(rooms) {
-            roomListDiv.innerHTML = ''; // 清空現有列表
+            roomListDiv.innerHTML = ''; 
             if (Object.keys(rooms).length === 0) {
                 roomListDiv.innerHTML = '<p>目前沒有可加入的房間。</p>';
                 return;
             }
             for (const roomId in rooms) {
-                const gameType = rooms[roomId]; // 後端 lobby_update 應提供 game_type
+                const gameType = rooms[roomId]; 
                 const roomItem = document.createElement('div');
                 roomItem.classList.add('room-list-item');
                 roomItem.innerHTML = `
@@ -195,61 +186,60 @@
                 addToLog("收到空的遊戲狀態", "error");
                 return;
             }
+            currentGameStateForClient = gameState; // 保存最新狀態
+
             currentGameType = gameState.game_type;
-            roomTitleH2.textContent = `遊戲房間: ${currentRoomId} (類型: ${currentGameType})`;
+            roomTitleH2.textContent = `遊戲房間: ${currentRoomId || gameState.room_id} (類型: ${currentGameType})`;
             currentGamePhaseDisplay.textContent = gameState.game_phase || '等待開始';
             potDisplay.textContent = gameState.pot || 0;
 
             if (gameState.game_type === 'texas_holdem') {
                 communityCardsDisplay.textContent = gameState.community_cards && gameState.community_cards.length > 0 ?
                     gameState.community_cards.map(c => `${c.rank}${c.suit}`).join(' ') : '---';
-                currentBetToMatchDisplay.textContent = gameState.current_bet_to_match || 0;
-                minRaiseAmountDisplay.textContent = gameState.min_raise || 0;
+                currentBetToMatchDisplay.textContent = gameState.current_street_bet_to_match || 0; // 後端應為 current_street_bet_to_match
+                minRaiseIncrementDisplay.textContent = gameState.min_next_raise_increment || 0; // 後端應為 min_next_raise_increment
 
-                const me = gameState.players.find(p => p.sid === mySid || p.name === currentPlayerName); // 假設後端 player 物件有 sid
+                const me = gameState.players.find(p => p.sid === mySid); 
                 if (me && me.hand && me.hand.length > 0) {
                     myHandDisplay.textContent = me.hand.map(c => `${c.rank}${c.suit}`).join(' ');
                 } else {
                     myHandDisplay.textContent = '---';
                 }
             } else {
-                // 其他遊戲的特定狀態顯示
                 communityCardsDisplay.textContent = 'N/A';
                 myHandDisplay.textContent = 'N/A';
             }
 
-
             playersDisplayDiv.innerHTML = '<h3>玩家列表</h3>';
             let currentTurnPlayerName = '---';
-            gameState.players.forEach(player => {
-                const playerDiv = document.createElement('div');
-                playerDiv.classList.add('player-info');
-                let playerText = `${player.name} (籌碼: ${player.chips}, 當前下注: ${player.current_bet})`;
-                if (!player.is_active_in_round && gameState.is_game_in_progress) playerText += " (已棄牌/旁觀)";
+            if (gameState.players && Array.isArray(gameState.players)) {
+                gameState.players.forEach(player => {
+                    const playerDiv = document.createElement('div');
+                    playerDiv.classList.add('player-info');
+                    let playerText = `${player.name || '未知玩家'} (籌碼: ${player.chips}, 本街道下注: ${player.bet_in_current_street || 0})`;
+                    if (!player.is_active_in_round && gameState.is_game_in_progress) playerText += " (已棄牌/旁觀)";
+                    if (player.is_all_in) playerText += " (All-in)";
 
-                if (player.sid === gameState.current_turn_sid) { // 假設 player 物件有 sid
-                    playerDiv.classList.add('current-turn');
-                    currentTurnPlayerName = player.name;
-                }
-                playerDiv.textContent = playerText;
-                playersDisplayDiv.appendChild(playerDiv);
-            });
+                    if (player.sid === gameState.current_turn_sid) { 
+                        playerDiv.classList.add('current-turn');
+                        currentTurnPlayerName = player.name || '未知玩家';
+                    }
+                    playerDiv.textContent = playerText;
+                    playersDisplayDiv.appendChild(playerDiv);
+                });
+            }
             currentPlayerTurnDisplay.textContent = currentTurnPlayerName;
 
-
-            // 更新操作按鈕的可用性
-            const myTurn = gameState.current_turn_sid === mySid && gameState.is_game_in_progress;
+            const myTurn = gameState.current_turn_sid === mySid && gameState.is_game_in_progress === true;
             gameActionsPanel.querySelectorAll('button').forEach(btn => btn.disabled = !myTurn);
             actionAmountInput.disabled = !myTurn;
-            startGameButton.disabled = gameState.is_game_in_progress;
+            startGameButton.disabled = gameState.is_game_in_progress === true;
 
-            if (gameState.message) { // 來自遊戲邏輯的特定訊息
+            if (gameState.message) { 
                 addToLog(`遊戲訊息: ${gameState.message}`);
             }
         }
 
-
-        // --- Socket.IO 事件監聽 ---
         socket.on('connect', () => {
             mySid = socket.id;
             mySidDisplay.textContent = mySid;
@@ -259,8 +249,7 @@
             playerNameInput.disabled = true;
             showView('lobby');
             addToLog('成功連接到伺服器。');
-            // 連線後可以請求一次大廳列表
-            socket.emit('get_lobby_info'); // 假設後端有這個事件獲取初始大廳列表
+            socket.emit('get_lobby_info'); 
         });
 
         socket.on('disconnect', () => {
@@ -285,9 +274,14 @@
         });
 
         socket.on('lobby_update', (data) => {
+            console.log('Received lobby_update event. Data:', data);
             if (data && data.rooms) {
                 updateRoomList(data.rooms);
                 addToLog('大廳房間列表已更新。');
+            } else {
+                console.error('Received lobby_update but data or data.rooms is invalid:', data);
+                addToLog('未能正確更新房間列表，收到的數據有問題。', 'error');
+                updateRoomList({});
             }
         });
 
@@ -296,7 +290,6 @@
             currentGameType = data.game_type;
             addToLog(`房間 ${currentRoomId} (${currentGameType}) 創建成功!`);
             showView('game-room');
-            // 後端在創建房間時，遊戲實例的 add_player 或 broadcast_state 應該會發送初始遊戲狀態
         });
 
         socket.on('joined_room_success', (data) => {
@@ -304,7 +297,6 @@
             currentGameType = data.game_type;
             addToLog(`成功加入房間 ${currentRoomId} (${currentGameType})`);
             showView('game-room');
-            // 遊戲實例的 add_player 應該會觸發狀態廣播
         });
 
         socket.on('left_room_success', (data) => {
@@ -312,40 +304,58 @@
             currentRoomId = null;
             currentGameType = null;
             showView('lobby');
-            // 清理遊戲界面
             myHandDisplay.textContent = '---';
             communityCardsDisplay.textContent = '---';
             playersDisplayDiv.innerHTML = '<h3>玩家列表</h3>';
         });
 
-        // 特定遊戲事件監聽 (範例: 德州撲克)
         socket.on('texas_holdem_update', (gameState) => {
             if (currentRoomId === gameState.room_id) {
-                addToLog('收到德州撲克遊戲狀態更新。');
+                addToLog('收到德州撲克遊戲狀態更新。階段: ' + gameState.game_phase + ', 輪到: ' + gameState.current_turn_sid);
                 updateGameView(gameState);
             }
         });
-        socket.on('texas_holdem_error', (data) => { // 遊戲內部錯誤
+        socket.on('texas_holdem_error', (data) => { 
             addToLog(`德州撲克錯誤: ${data.message}`, 'error');
             alert(`遊戲錯誤: ${data.message}`);
         });
-        socket.on('texas_holdem_game_over', (data) => {
-            addToLog('德州撲克遊戲結束。');
-            updateGameView(data.final_state || {}); // 顯示最終狀態
+
+        socket.on('texas_holdem_game_over', (data) => { 
+            addToLog('德州撲克遊戲結束 EVENT RECEIVED. Data: ' + JSON.stringify(data));
+
+            // --- 立即禁用操作按鈕 ---
+            gameActionsPanel.querySelectorAll('button').forEach(btn => btn.disabled = true);
+            actionAmountInput.disabled = true;
+            startGameButton.disabled = false; // 允許開始新遊戲
+            currentPlayerTurnDisplay.textContent = '遊戲結束';
+            // --- 結束立即禁用 ---
+            
+            // 使用收到的 data (應包含 is_game_in_progress: false) 來更新視圖
+            // data 本身應該就是一個完整的 gameState 結構，或者包含一個 final_state
+            updateGameView(data); // data 應包含 is_game_in_progress: false
+
             let resultText = "遊戲結束!\n";
-            if(data.winners && data.winners.length > 0) {
-                data.winners.forEach(winner => {
-                    resultText += `贏家: ${winner.name}, 贏得: ${winner.amount_won}, 手牌: ${winner.hand ? winner.hand.map(c=>c.rank+c.suit).join(' ') : 'N/A'}\n`;
+            const gameOverResults = data.game_over_results; // 後端 end_game 應發送此結構
+
+            if (gameOverResults && gameOverResults.winners && gameOverResults.winners.length > 0) {
+                gameOverResults.winners.forEach(winner => {
+                    let handString = 'N/A';
+                    // 'hand' 是玩家的底牌, 'best_5_card_hand' 是組成最佳牌型的牌
+                    if (winner.best_5_card_hand && winner.best_5_card_hand.length > 0) {
+                        handString = winner.best_5_card_hand.map(c => `${c.rank}${c.suit}`).join(' ');
+                    } else if (winner.hand && winner.hand.length > 0) { // 備用顯示底牌
+                        handString = winner.hand.map(c => `${c.rank}${c.suit}`).join(' ');
+                    }
+                    resultText += `贏家: ${winner.name}, 贏得: ${winner.amount_won}. 牌型: ${winner.best_hand_description || ''}. (${handString}). 原因: ${winner.reason || ''}\n`;
                 });
+            } else if (gameOverResults && gameOverResults.message) {
+                resultText += gameOverResults.message;
             } else {
-                resultText += data.message || "無明確贏家.";
+                resultText += "無明確贏家或結果信息。";
             }
             alert(resultText);
-            startGameButton.disabled = false; // 允許重新開始 (如果適用)
         });
-        // 你需要為每個遊戲類型添加類似的 update, error, game_over 事件監聽器
 
-        // --- 按鈕事件綁定 ---
         connectButton.addEventListener('click', () => {
             currentPlayerName = playerNameInput.value.trim();
             if (!currentPlayerName) {
@@ -353,10 +363,9 @@
                 return;
             }
             if (!socket.connected) {
-                socket.connect(); // 如果之前斷開，嘗試重新連接
+                socket.connect(); 
                 addToLog('嘗試連接到伺服器...');
             } else {
-                // 理論上 connectButton 在已連接時應為 disabled
                 showView('lobby');
             }
         });
@@ -371,7 +380,6 @@
                     big_blind: parseInt(document.getElementById('bigBlind').value) || 20,
                 };
             }
-            // 其他遊戲類型選項...
             socket.emit('create_room', {
                 game_type: gameType,
                 player_name: currentPlayerName,
@@ -388,7 +396,7 @@
         startGameButton.addEventListener('click', () => {
             if (currentRoomId) {
                 socket.emit('start_game_request', { room_id: currentRoomId });
-                startGameButton.disabled = true; // 防止重複點擊
+                startGameButton.disabled = true; 
             }
         });
 
@@ -396,36 +404,30 @@
             if (event.target.tagName === 'BUTTON' && event.target.dataset.action) {
                 const action = event.target.dataset.action;
                 let payload = {};
-                if (['bet', 'raise', 'call'].includes(action)) { // Call 也可能需要 amount (如果是非固定跟注)
+                if (['bet', 'raise'].includes(action)) { 
                     const amount = parseInt(actionAmountInput.value);
-                    // Call 的 amount 通常由伺服器狀態決定，但如果前端允許輸入則傳遞
-                    if (action === 'call'){
-                        // Call 通常不需要前端輸入金額，但如果設計如此
-                        // payload.amount = gameState.current_bet_to_match - myCurrentBet (需要從 gameState 計算)
-                        // 為了簡單，這裡假設 'call' 不需要 amount，伺服器會處理
-                    } else if (isNaN(amount) && (action === 'bet' || action === 'raise')) {
+                    if (isNaN(amount) || (action === 'bet' && amount <=0) || (action === 'raise' && amount <=0) ) { // Raise 的 amount 是總額
                         alert('請輸入有效的金額!');
                         return;
-                    } else if (action === 'bet' || action === 'raise'){
-                         payload.amount = amount;
                     }
+                    payload.amount = amount;
                 }
+                // Call 通常不需要前端傳 amount，後端會根據 current_street_bet_to_match 計算
+                // Fold 和 Check 不需要 payload.amount
+                
+                addToLog(`發送操作: ${action} ${payload.amount !== undefined ? '金額: ' + payload.amount : ''}`);
                 socket.emit('game_action', {
                     room_id: currentRoomId,
                     action_type: action,
                     payload: payload
                 });
-                addToLog(`發送操作: ${action} ${payload.amount !== undefined ? payload.amount : ''}`);
             }
         });
 
-        // --- 初始化 ---
-        showView('connection'); // 初始顯示連線畫面
-        // 初始隱藏遊戲特定選項
-        document.getElementById('texas-holdem-options').style.display = 'block'; // 預設顯示德撲選項
+        showView('connection'); 
+        document.getElementById('texas-holdem-options').style.display = 'block'; 
         gameTypeSelect.addEventListener('change', function() {
             document.getElementById('texas-holdem-options').style.display = this.value === 'texas_holdem' ? 'block' : 'none';
-            // 其他遊戲選項的顯示邏輯
         });
 
     </script>
