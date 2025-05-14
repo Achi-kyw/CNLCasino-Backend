@@ -2,3 +2,4 @@
 __pycache__
 __MACOSX__
 client_secret.json
+*.db

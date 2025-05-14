@@ -12,6 +12,13 @@ app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your-secret-key')
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
+# 配置 session cookie 的安全屬性
+app.config.update(
+    SESSION_COOKIE_SECURE=False,  # 本地使用 HTTP，設為 False；生產環境設為 True
+    SESSION_COOKIE_HTTPONLY=True,  # 防止 JavaScript 訪問 cookie
+    SESSION_COOKIE_SAMESITE='Lax',  # 防止 CSRF，允許跨域 POST
+)
+
 # 啟用 CORS，允許來自 http://localhost:8000 的請求，並支持憑證
 CORS(app, resources={r"/*": {"origins": "http://localhost:8000"}}, supports_credentials=True)
 
