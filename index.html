@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>德州撲克遊戲</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Socket.IO CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js"></script>
+    <!-- React CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.5/babel.min.js"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+    <div id="root" class="container mx-auto p-4"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [tables, setTables] = useState([]);
+            const [currentTable, setCurrentTable] = useState(null);
+            const [gameState, setGameState] = useState(null);
+            const [betAmount, setBetAmount] = useState('');
+            const [error, setError] = useState('');
+            const [socket, setSocket] = useState(null);
+
+            // 初始化：檢查用戶狀態並獲取桌子列表
+            useEffect(() => {
+                fetchUserInfo();
+                const newSocket = io('http://localhost:4000');
+                setSocket(newSocket);
+                return () => newSocket.disconnect();
+            }, []);
+
+            // 監聽 Socket.IO 事件
+            useEffect(() => {
+                if (socket && currentTable) {
+                    socket.emit('join_table', { table_id: currentTable.table_id });
+                    socket.on('game_state', (state) => {
+                        setGameState(state);
+                    });
+                    socket.on('message', (data) => {
+                        console.log(data.message);
+                    });
+                    return () => {
+                        socket.off('game_state');
+                        socket.off('message');
+                    };
+                }
+            }, [socket, currentTable]);
+
+            // 獲取用戶資訊
+            const fetchUserInfo = async () => {
+                try {
+                    const response = await fetch('http://localhost:4000/user', {
+                        credentials: 'include'
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        setUser(data);
+                        fetchTables();
+                    } else {
+                        setUser(null);
+                    }
+                } catch (err) {
+                    setError('無法獲取用戶資訊');
+                    setUser(null);
+                }
+            };
+
+            // 獲取桌子列表
+            const fetchTables = async () => {
+                try {
+                    const response = await fetch('http://localhost:4000/tables', {
+                        credentials: 'include'
+                    });
+                    const data = await response.json();
+                    if (data.error) {
+                        setError(data.error);
+                    } else {
+                        setTables(data);
+                    }
+                } catch (err) {
+                    setError('無法獲取桌子列表');
+                }
+            };
+
+            // 加入桌子
+            const joinTable = async (tableId) => {
+                try {
+                    const response = await fetch(`http://localhost:4000/join_table/${tableId}`, {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    const data = await response.json();
+                    if (data.error) {
+                        setError(data.error);
+                    } else {
+                        setCurrentTable({ table_id: tableId, seat: data.seat });
+                        setError('');
+                    }
+                } catch (err) {
+                    setError('無法加入桌子');
+                }
+            };
+
+            // 開始遊戲
+            const startGame = async () => {
+                try {
+                    const response = await fetch(`http://localhost:4000/start_game/${currentTable.table_id}`, {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    const data = await response.json();
+                    if (data.error) {
+                        setError(data.error);
+                    } else {
+                        setGameState(data);
+                        setError('');
+                    }
+                } catch (err) {
+                    setError('無法開始遊戲');
+                }
+            };
+
+            // 下注
+            const placeBet = async () => {
+                try {
+                    const response = await fetch(`http://localhost:4000/bet/${currentTable.table_id}`, {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ amount: parseInt(betAmount) })
+                    });
+                    const data = await response.json();
+                    if (data.error) {
+                        setError(data.error);
+                    } else {
+                        setGameState(data);
+                        setBetAmount('');
+                        setError('');
+                    }
+                } catch (err) {
+                    setError('下注失敗');
+                }
+            };
+
+            // 登出
+            const logout = async () => {
+                try {
+                    const response = await fetch('http://localhost:4000/logout', {
+                        method: 'POST',
+                        credentials: 'include'
+                    });
+                    const data = await response.json();
+                    if (data.error) {
+                        setError(data.error);
+                    } else {
+                        setUser(null);
+                        setCurrentTable(null);
+                        setGameState(null);
+                        setError('');
+                        // 模擬重定向到首頁
+                        window.location.href = '/index.html';
+                    }
+                } catch (err) {
+                    setError('登出失敗，但 session 已清除');
+                    setUser(null);
+                    setCurrentTable(null);
+                    setGameState(null);
+                    window.location.href = '/index.html';
+                }
+            };
+
+            return (
+                <div className="max-w-4xl mx-auto">
+                    <h1 className="text-3xl font-bold mb-4 text-center">德州撲克遊戲</h1>
+
+                    {/* 用戶資訊 */}
+                    <div className="mb-4 flex justify-between">
+                        {user ? (
+                            <div>
+                                <span className="text-lg">歡迎，{user.name} ({user.email})</span>
+                                <button
+                                    onClick={logout}
+                                    className="ml-4 bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+                                >
+                                    登出
+                                </button>
+                            </div>
+                        ) : (
+                            <a
+                                href="http://localhost:4000/login"
+                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                            >
+                                使用 Google 登錄
+                            </a>
+                        )}
+                    </div>
+
+                    {/* 錯誤訊息 */}
+                    {error && (
+                        <div className="bg-red-100 text-red-700 p-4 mb-4 rounded">
+                            {error}
+                        </div>
+                    )}
+
+                    {/* 桌子列表 */}
+                    {!currentTable && user && (
+                        <div className="mb-8">
+                            <h2 className="text-2xl font-semibold mb-2">可用桌子</h2>
+                            <div className="grid grid-cols-1 gap-4">
+                                {tables.map((table) => (
+                                    <div
+                                        key={table.table_id}
+                                        className="bg-white p-4 rounded shadow flex justify-between items-center"
+                                    >
+                                        <div>
+                                            <h3 className="text-lg font-medium">{table.name}</h3>
+                                            <p>最大玩家數：{table.max_players}</p>
+                                        </div>
+                                        <button
+                                            onClick={() => joinTable(table.table_id)}
+                                            className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                                        >
+                                            加入
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 遊戲介面 */}
+                    {currentTable && (
+                        <div className="bg-white p-6 rounded shadow">
+                            <h2 className="text-2xl font-semibold mb-4">桌子 #{currentTable.table_id}</h2>
+                            <p className="mb-4">你的座位：{currentTable.seat}</p>
+
+                            {gameState ? (
+                                <div>
+                                    <h3 className="text-xl font-medium mb-2">遊戲狀態</h3>
+                                    <p className="mb-2">公牌：{gameState.community_cards.join(', ')}</p>
+                                    <p className="mb-2">獎池：{gameState.pot}</p>
+                                    <div className="mb-4">
+                                        <h4 className="font-medium">玩家手牌</h4>
+                                        {gameState.players.map((player) => (
+                                            <p key={player.email}>
+                                                {player.email}：{player.email === user.email ? player.hand.join(', ') : '隱藏'}
+                                            </p>
+                                        ))}
+                                    </div>
+                                    <div className="flex items-center mb-4">
+                                        <input
+                                            type="number"
+                                            value={betAmount}
+                                            onChange={(e) => setBetAmount(e.target.value)}
+                                            placeholder="輸入賭注金額"
+                                            className="border p-2 rounded mr-2"
+                                        />
+                                        <button
+                                            onClick={placeBet}
+                                            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                        >
+                                            下注
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <button
+                                    onClick={startGame}
+                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                >
+                                    開始遊戲
+                                </button>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // 渲染應用
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
