@@ -1,3 +1,4 @@
+from datetime import timedelta
 from flask import Flask, redirect, url_for, session, request
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
@@ -8,6 +9,7 @@ import requests
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key'  # 設置 Flask session 密鑰
+app.permanent_session_lifetime = timedelta(hours=1)  # 會話有效期 1 小時
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'  # 允許本地測試（僅限開發）
 
 # Google OAuth 2.0 配置
@@ -81,6 +83,7 @@ def callback():
 
     # 儲存用戶資訊到 session 或資料庫
     session['user'] = user_info
+    session.permanent = True
     return f'登錄成功！歡迎 {user_info["name"]} ({user_info["email"]})'
 
 @app.route('/logout')

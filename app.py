@@ -25,7 +25,7 @@ REGISTERED_GAME_LOGIC = {
 @app.route('/')
 def index():
     # 可以是一個顯示可用房間列表或創建房間選項的頁面
-    return render_template('login.html', rooms=active_rooms) # 傳遞房間資訊給模板
+    return render_template('index.html', rooms=active_rooms) # 傳遞房間資訊給模板
 
 @socketio.on('connect')
 def handle_connect():
