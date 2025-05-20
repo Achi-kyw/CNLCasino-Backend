@@ -231,6 +231,12 @@ class BlackJackGame(BaseGame):
                 self.players[sid]['hand'] = deal_cards(self.game_state['deck'], 2)
                 self.players[sid]['hand_value'] = calculate_hand_value(self.players[sid]['hand'])
                 self.players[sid]['has_blackjack'] = is_blackjack(self.players[sid]['hand'])
+                
+                # 如果玩家有自然21點，記錄這個資訊
+                if self.players[sid]['has_blackjack']:
+                    player_name = self.players[sid]['name']
+                    print(f"[21點房間 {self.room_id}] 玩家 {player_name} 獲得自然21點！")
+                    self.broadcast_state(message=f"玩家 {player_name} 獲得自然21點！")
         
         # 發牌給莊家，兩張牌（一張明牌，一張暗牌）
         self.game_state['dealer_hand'] = deal_cards(self.game_state['deck'], 2)
@@ -257,12 +263,27 @@ class BlackJackGame(BaseGame):
         else:
             # 進入玩家回合階段
             self.game_state['game_phase'] = 'player_turns'
-            # 設置第一個行動的玩家
+            
+            # 找出第一個可以行動的玩家（沒有21點或爆牌）
+            next_player_found = False
             if self.game_state['round_active_players_sids_in_order']:
-                self.game_state['current_turn_sid'] = self.game_state['round_active_players_sids_in_order'][0]
-                player_name = self.players[self.game_state['current_turn_sid']]['name']
-                print(f"[21點房間 {self.room_id}] 輪到玩家 {player_name} 行動。")
-                self.broadcast_state(message=f"輪到玩家 {player_name} 行動。")
+                for next_sid in self.game_state['round_active_players_sids_in_order']:
+                    if (self.players[next_sid]['is_active_in_round'] and 
+                        not self.players[next_sid]['is_busted'] and 
+                        not self.players[next_sid]['has_blackjack'] and
+                        self.players[next_sid]['hand_value'] < 21):
+                        self.game_state['current_turn_sid'] = next_sid
+                        next_player_found = True
+                        player_name = self.players[next_sid]['name']
+                        print(f"[21點房間 {self.room_id}] 輪到玩家 {player_name} 行動。")
+                        self.broadcast_state(message=f"輪到玩家 {player_name} 行動。")
+                        break
+                
+                # 如果沒有找到下一個玩家，檢查是否所有人都有21點或爆牌
+                if not next_player_found:
+                    print(f"[21點房間 {self.room_id}] 所有玩家都已經有21點或爆牌，進入莊家回合。")
+                    self.broadcast_state(message="所有玩家都已完成行動，進入莊家回合。")
+                    self._dealer_turn()
             else:
                 # 沒有活躍玩家，直接進入莊家回合
                 self._dealer_turn()
@@ -381,7 +402,7 @@ class BlackJackGame(BaseGame):
             self.send_error_to_player(player_sid, "您不在本局遊戲中。")
             return False
         
-        if player['is_busted'] or player['has_blackjack']:
+        if player['is_busted'] or player['has_blackjack'] or player['hand_value'] == 21:
             self.send_error_to_player(player_sid, "您已經爆牌或有21點，無法繼續行動。")
             return False
         
@@ -458,7 +479,11 @@ class BlackJackGame(BaseGame):
         next_player_found = False
         for i in range(current_idx + 1, len(self.game_state['round_active_players_sids_in_order'])):
             next_sid = self.game_state['round_active_players_sids_in_order'][i]
-            if self.players[next_sid]['is_active_in_round'] and not self.players[next_sid]['is_busted'] and not self.players[next_sid]['has_blackjack']:
+            # Skip players who: are busted, have blackjack, or have exactly 21 points
+            if (self.players[next_sid]['is_active_in_round'] and 
+                not self.players[next_sid]['is_busted'] and 
+                not self.players[next_sid]['has_blackjack'] and
+                self.players[next_sid]['hand_value'] < 21):
                 self.game_state['current_turn_sid'] = next_sid
                 next_player_found = True
                 player_name = self.players[next_sid]['name']
