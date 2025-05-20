@@ -200,13 +200,13 @@
                     currentPlayerName = storedName.trim();
                     playerNameInput.value = currentPlayerName; // 預填輸入框
                     addToLog(`從 localStorage 載入名稱: ${currentPlayerName}`);
-                    return true;
+                    return currentPlayerName;
                 }
             } catch (e) {
                 addToLog('無法從 localStorage 讀取玩家名稱。', 'error');
                 console.error("Error loading from localStorage:", e);
             }
-            return false;
+            return null;
         }
 
 
@@ -460,22 +460,14 @@
             connectionStatusDisplay.textContent = '已連線!';
             addToLog('成功連接到伺服器。');
 
-            // 只有在 currentPlayerName 已被設定 (來自 localStorage 或 connectButton 點擊) 時才自動進入大廳
-            if (currentPlayerName && currentPlayerName.trim()) {
-                connectButton.textContent = '已連線';
-                connectButton.disabled = true;
-                playerNameInput.disabled = true;
+            // 只有在手動點擊連接按鈕後，才會進入大廳
+            if (connectButton.textContent === '已連線') {
                 if(lobbyPlayerNameSpan) lobbyPlayerNameSpan.textContent = currentPlayerName;
                 if(gameRoomPlayerNameSpan) gameRoomPlayerNameSpan.textContent = currentPlayerName;
                 showView('lobby');
                 socket.emit('get_lobby_info');
-            } else {
-                // 如果沒有 currentPlayerName (例如首次訪問或 localStorage 為空)，則停留在連線設定介面
-                showView('connection');
-                connectButton.disabled = false;
-                playerNameInput.disabled = false;
-                addToLog('請設定您的名稱並點擊連接按鈕。');
             }
+            // 否則保持在連線設定頁面
         });
 
         socket.on('disconnect', () => {
@@ -671,6 +663,9 @@
             if(gameRoomPlayerNameSpan) gameRoomPlayerNameSpan.textContent = currentPlayerName;
 
             if (!socket.connected) {
+                connectButton.textContent = '已連線';
+                connectButton.disabled = true;
+                playerNameInput.disabled = true;
                 addToLog('嘗試連接到伺服器...');
                 socket.connect(); // 觸發 'connect' 事件
             } else {
@@ -721,15 +716,24 @@
 
         // --- 初始化 ---
         window.addEventListener('DOMContentLoaded', (event) => {
-            loadPlayerNameFromStorage(); // 嘗試載入已儲存的名稱
-            showView('connection'); // 預設顯示連線介面
-
-            if (currentPlayerName && currentPlayerName.trim()) {
-                addToLog(`偵測到已儲存名稱: ${currentPlayerName}。嘗試自動連接...`);
-                socket.connect(); // 如果有名字，嘗試自動連接
+            // 嘗試載入名稱，但不自動連接
+            const savedName = loadPlayerNameFromStorage(); 
+            if (savedName) {
+                playerNameInput.value = savedName;
+                addToLog(`已載入儲存的名稱: ${savedName}，請點擊連線按鈕登入`);
             } else {
-                addToLog("未找到已儲存的玩家名稱，請手動設定並連接。");
+                addToLog("請輸入您的名字並點擊連線按鈕。");
             }
+            
+            showView('connection'); // 預設顯示連線介面
+            
+            // 禁用自動連接
+            // if (currentPlayerName && currentPlayerName.trim()) {
+            //     addToLog(`偵測到已儲存名稱: ${currentPlayerName}。嘗試自動連接...`);
+            //     socket.connect(); // 如果有名字，嘗試自動連接
+            // } else {
+            //    addToLog("未找到已儲存的玩家名稱，請手動設定並連接。");
+            // }
             
             // 切換遊戲選項顯示
             gameTypeSelect.addEventListener('change', function() {
