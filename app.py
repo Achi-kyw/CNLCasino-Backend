@@ -8,7 +8,7 @@ import uuid # 用於生成唯一的房間 ID
 
 # from games.game_factory import create_game_instance # 如果使用工廠模式
 from games.texas_holdem.logic import TexasHoldemGame # 直接導入或透過工廠
-# from games.blackjack.logic import BlackjackGame
+from games.black_jack.logic import BlackJackGame
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_very_secret_multi_game_key!'
@@ -19,7 +19,7 @@ active_rooms = {} # room_id -> GameInstance (例如 TexasHoldemGame 的實例)
 # 遊戲類型註冊 (如果不使用工廠，可以在這裡手動管理)
 REGISTERED_GAME_LOGIC = {
     "texas_holdem": TexasHoldemGame,
-    # "blackjack": BlackjackGame,
+    "black_jack": BlackJackGame,
 }
 
 @app.route('/')
@@ -64,7 +64,8 @@ def handle_disconnect():
 
 
     # 更新大廳資訊 (如果有的話)
-    socketio.emit('lobby_update', {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}, broadcast=True)
+    lobby_data = {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}
+    socketio.emit('lobby_update', lobby_data, to=None)
 
 
 @socketio.on('create_room')
@@ -96,7 +97,8 @@ def handle_create_room(data):
     # 向創建者發送一次完整的遊戲狀態
     game_instance.broadcast_state(specific_sid=sid)
     # 更新大廳資訊
-    socketio.emit('lobby_update', {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}, broadcast=True)
+    lobby_data = {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}
+    socketio.emit('lobby_update', lobby_data, to=None)
 
 
 @socketio.on('join_room_request') # 改名以區分 SocketIO 的 join_room
@@ -135,7 +137,8 @@ def handle_join_room_request(data):
     # 但可以給剛加入的玩家發送一個確認訊息
     emit('joined_room_success', {'room_id': room_id, 'game_type': game_instance.get_game_type()}, room=sid)
     # 更新大廳資訊
-    socketio.emit('lobby_update', {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}, broadcast=True)
+    lobby_data = {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}
+    socketio.emit('lobby_update', lobby_data, to=None)
 
 
 @socketio.on('leave_room_request')
@@ -165,7 +168,8 @@ def handle_leave_room_request(data):
             print(f"Room {room_id} is now empty after player left. Removing.")
             if room_id in active_rooms: del active_rooms[room_id] # 清理房間
             # 更新大廳資訊
-            socketio.emit('lobby_update', {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}, broadcast=True)
+            lobby_data = {'rooms': {r_id: game.get_game_type() for r_id, game in active_rooms.items()}}
+            socketio.emit('lobby_update', lobby_data, to=None)
 
 
 @socketio.on('start_game_request') # 通用的開始遊戲請求
@@ -207,6 +211,8 @@ def on_game_action(data):
     action_type = data.get('action_type')
     payload = data.get('payload', {})
 
+    print(f"收到遊戲動作: SID={sid}, room_id={room_id}, action_type={action_type}, payload={payload}")
+
     if not room_id or room_id not in active_rooms:
         emit('error_message', {'message': 'Room not found for action.'})
         return
@@ -217,8 +223,11 @@ def on_game_action(data):
         return
 
     print(f"Room {room_id}: Player {sid} action: {action_type} with payload: {payload}")
-    # 將動作轉發給對應的遊戲實例處理
+    
+    # 直接傳遞payload給handle_action，確保金額數據被正確處理
     action_result = game_instance.handle_action(sid, action_type, payload)
+    
+    print(f"動作處理結果: {action_result}")
 
     # game_instance.handle_action 內部應該會調用 broadcast_state 或 send_error_to_player
     # 如果 action_result 有特定回饋給該玩家，可以在這裡處理

@@ -72,7 +72,7 @@ class BaseGame(ABC):
             self.socketio.emit(event_name, player_state, room=specific_sid)
         else: # 廣播給房間內所有玩家
             # 確保每個玩家都收到他們應該看到的狀態
-            for sid in self.players.keys():
+            for sid in list(self.players.keys()):
                 player_state = self.get_state_for_player(sid)
                 if message: # 可以附加一個通用訊息
                     player_state['message'] = message

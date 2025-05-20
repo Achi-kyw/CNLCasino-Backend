@@ -105,9 +105,27 @@ class BlackJackGame(BaseGame):
             self.send_error_to_player(player_sid, "目前非下注階段。")
             return False
         
+        if self.game_state['current_turn_sid'] != player_sid:
+            self.send_error_to_player(player_sid, "還沒輪到您下注。")
+            return False
+        
         player = self.players.get(player_sid)
         if not player:
             self.send_error_to_player(player_sid, "玩家不存在。")
+            return False
+        
+        # 輸出調試信息
+        print(f"[21點房間 {self.room_id}] 玩家 {player['name']} ({player_sid}) 嘗試下注 {bet_amount} 籌碼。當前籌碼: {player['chips']}")
+        
+        # 確保 bet_amount 是整數
+        try:
+            bet_amount = int(bet_amount)
+        except (ValueError, TypeError):
+            self.send_error_to_player(player_sid, "下注金額必須為整數。")
+            return False
+        
+        if bet_amount <= 0:
+            self.send_error_to_player(player_sid, "下注金額必須大於零。")
             return False
         
         if player['bet'] > 0:
@@ -129,13 +147,27 @@ class BlackJackGame(BaseGame):
         player['bet'] = bet_amount
         player['chips'] -= bet_amount
         player['is_active_in_round'] = True
+        player['has_acted_this_round'] = True
         
-        print(f"[21點房間 {self.room_id}] 玩家 {player['name']} 下注 {bet_amount}。")
-        self.broadcast_state(message=f"玩家 {player['name']} 下注 {bet_amount}。")
+        print(f"[21點房間 {self.room_id}] 玩家 {player['name']} 下注 {bet_amount} 成功。剩餘籌碼: {player['chips']}")
         
-        # 檢查是否所有玩家都已下注
-        all_players_bet = all(p['bet'] > 0 or not p['is_active_in_round'] for p in self.players.values())
-        if all_players_bet:
+        # 移至下一位玩家或進入發牌階段
+        current_idx = self.game_state['round_active_players_sids_in_order'].index(player_sid)
+        next_player_found = False
+        
+        for i in range(current_idx + 1, len(self.game_state['round_active_players_sids_in_order'])):
+            next_sid = self.game_state['round_active_players_sids_in_order'][i]
+            if not self.players[next_sid]['has_acted_this_round']:
+                self.game_state['current_turn_sid'] = next_sid
+                next_player_found = True
+                print(f"[21點房間 {self.room_id}] 輪到玩家 {self.players[next_sid]['name']} 下注")
+                self.broadcast_state(message=f"玩家 {player['name']} 下注 {bet_amount}。輪到 {self.players[next_sid]['name']} 下注。")
+                break
+        
+        if not next_player_found:
+            # 所有玩家都已下注，進入發牌階段
+            print(f"[21點房間 {self.room_id}] 所有玩家都已下注，進入發牌階段")
+            self.broadcast_state(message=f"玩家 {player['name']} 下注 {bet_amount}。所有玩家都已下注，開始發牌。")
             self._deal_initial_cards()
         
         return True
@@ -165,23 +197,26 @@ class BlackJackGame(BaseGame):
         self.game_state['dealer_hand'] = []
         self.game_state['dealer_hand_value'] = 0
         self.game_state['dealer_has_blackjack'] = False
+        self.game_state['current_turn_sid'] = eligible_player_sids[0] if eligible_player_sids else None
 
         # 重設所有玩家的狀態
         for sid in self.players:
-            self.players[sid]['hand'] = []
-            self.players[sid]['hand_value'] = 0
-            self.players[sid]['bet'] = 0
-            self.players[sid]['is_active_in_round'] = sid in eligible_player_sids
-            self.players[sid]['has_acted_this_round'] = False
-            self.players[sid]['is_busted'] = False
-            self.players[sid]['has_blackjack'] = False
-            self.players[sid]['has_doubled_down'] = False
-            self.players[sid]['has_insurance'] = False
-            self.players[sid]['insurance_bet'] = 0
+            self.players[sid].update({
+                'hand': [],
+                'hand_value': 0,
+                'bet': 0,
+                'is_active_in_round': sid in eligible_player_sids,
+                'has_acted_this_round': False,
+                'is_busted': False,
+                'has_blackjack': False,
+                'has_doubled_down': False,
+                'has_insurance': False,
+                'insurance_bet': 0
+            })
         
         self.game_state['round_active_players_sids_in_order'] = eligible_player_sids.copy()
         
-        print(f"[21點房間 {self.room_id}] 新牌局已開始。等待玩家下注。")
+        print(f"[21點房間 {self.room_id}] 新牌局已開始。等待玩家下注。當前玩家: {self.game_state['current_turn_sid']}")
         self.broadcast_state(message="新牌局開始！請各位玩家下注。")
         return True
 
@@ -232,7 +267,7 @@ class BlackJackGame(BaseGame):
                 # 沒有活躍玩家，直接進入莊家回合
                 self._dealer_turn()
 
-    def take_insurance(self, player_sid, take=False):
+    def take_insurance(self, player_sid, take=False, amount=0):
         """玩家決定是否購買保險"""
         if not self.is_game_in_progress or self.game_state['game_phase'] != 'insurance':
             self.send_error_to_player(player_sid, "目前非保險階段。")
@@ -248,7 +283,7 @@ class BlackJackGame(BaseGame):
             return False
         
         if take:
-            insurance_amount = player['bet'] / 2
+            insurance_amount = amount if amount > 0 else player['bet'] / 2
             if insurance_amount > player['chips']:
                 self.send_error_to_player(player_sid, "您的籌碼不足以購買保險。")
                 return False
@@ -282,7 +317,31 @@ class BlackJackGame(BaseGame):
         if self.game_state['game_phase'] == 'betting':
             # 處理下注動作
             if action_type == 'bet':
-                return self.place_bet(player_sid, data.get('amount', 0))
+                amount = 0
+                
+                # 嘗試從不同可能的數據結構中獲取下注金額
+                if isinstance(data, dict):
+                    # 直接在 data 中查找 amount
+                    if 'amount' in data:
+                        amount = data['amount']
+                        print(f"[21點房間 {self.room_id}] 從 data['amount'] 獲取到下注金額: {amount}")
+                    # 嘗試在 payload 中查找 amount (兼容舊格式)
+                    elif 'payload' in data and isinstance(data['payload'], dict) and 'amount' in data['payload']:
+                        amount = data['payload']['amount']
+                        print(f"[21點房間 {self.room_id}] 從 data['payload']['amount'] 獲取到下注金額: {amount}")
+                
+                # 確保金額是整數
+                try:
+                    amount = int(amount)
+                except (ValueError, TypeError):
+                    print(f"[21點房間 {self.room_id}] 下注金額無效: {amount}, 類型: {type(amount)}")
+                    self.send_error_to_player(player_sid, "下注金額必須為有效整數。")
+                    return False
+                
+                print(f"[21點房間 {self.room_id}] 玩家 {player_sid} 嘗試下注，操作: {action_type}, 數據: {data}, 處理後金額: {amount}")
+                
+                # 調用下注方法
+                return self.place_bet(player_sid, amount)
             else:
                 self.send_error_to_player(player_sid, "當前階段只能進行下注。")
                 return False
@@ -290,7 +349,21 @@ class BlackJackGame(BaseGame):
         if self.game_state['game_phase'] == 'insurance':
             # 處理保險動作
             if action_type == 'insurance':
-                return self.take_insurance(player_sid, data.get('take', False))
+                take = data.get('take', False)
+                amount = data.get('amount', 0)
+                
+                if not take and amount > 0:
+                    take = True
+                
+                # 同樣兼容 payload 結構
+                if 'payload' in data and isinstance(data['payload'], dict):
+                    if 'amount' in data['payload'] and data['payload']['amount'] > 0:
+                        take = True
+                        amount = data['payload']['amount']
+                
+                return self.take_insurance(player_sid, take, amount)
+            elif action_type == 'decline_insurance':
+                return self.take_insurance(player_sid, False, 0)
             else:
                 self.send_error_to_player(player_sid, "當前階段只能決定是否購買保險。")
                 return False
@@ -326,6 +399,9 @@ class BlackJackGame(BaseGame):
                 player['is_busted'] = True
                 action_message += f" 爆牌了！手牌點數：{player['hand_value']}。"
                 self._advance_to_next_player_or_phase()
+            elif player['hand_value'] == 21:
+                action_message += f" 達到21點！"
+                self._advance_to_next_player_or_phase()
             
             action_processed_successfully = True
         
@@ -357,6 +433,8 @@ class BlackJackGame(BaseGame):
             if is_bust(player['hand']):
                 player['is_busted'] = True
                 action_message += f" 爆牌了！手牌點數：{player['hand_value']}。"
+            elif player['hand_value'] == 21:
+                action_message += f" 達到21點！"
             
             action_processed_successfully = True
             self._advance_to_next_player_or_phase()  # 雙倍下注後自動進入下一個玩家或階段
@@ -430,12 +508,19 @@ class BlackJackGame(BaseGame):
         dealer_busted = is_bust(self.game_state['dealer_hand'])
         
         settlement_messages = []
+        results = {}
         
         for sid, player in self.players.items():
             if not player['is_active_in_round']:
                 continue
             
             result_message = f"玩家 {player['name']}："
+            result = {
+                'outcome': '',
+                'payout': 0,
+                'hand_value': player['hand_value'],
+                'dealer_hand_value': self.game_state['dealer_hand_value']
+            }
             
             # 處理保險賠付
             if player['has_insurance']:
@@ -443,31 +528,45 @@ class BlackJackGame(BaseGame):
                     insurance_win = player['insurance_bet'] * 2  # 保險賠付2:1
                     player['chips'] += insurance_win
                     result_message += f" 保險贏得 {insurance_win}。"
+                    result['insurance_outcome'] = 'win'
+                    result['insurance_payout'] = insurance_win
                 else:
                     result_message += f" 保險輸了 {player['insurance_bet']}。"
+                    result['insurance_outcome'] = 'lose'
+                    result['insurance_payout'] = -player['insurance_bet']
             
             # 處理主要賭注
             if player['is_busted']:
                 # 玩家爆牌
                 result_message += f" 爆牌，損失 {player['bet']}。"
+                result['outcome'] = 'bust'
+                result['payout'] = -player['bet']
             elif player['has_blackjack']:
                 if dealer_has_blackjack:
                     # 雙方都有21點，平局
                     player['chips'] += player['bet']
                     result_message += f" 和莊家都有21點，平局，返還 {player['bet']}。"
+                    result['outcome'] = 'push'
+                    result['payout'] = 0
                 else:
                     # 玩家有21點，莊家沒有，賠付3:2
                     win_amount = player['bet'] * 1.5
                     player['chips'] += player['bet'] + win_amount
                     result_message += f" 21點獲勝，贏得 {win_amount}。"
+                    result['outcome'] = 'blackjack'
+                    result['payout'] = win_amount
             elif dealer_has_blackjack:
                 # 莊家有21點，玩家沒有
                 result_message += f" 莊家有21點，損失 {player['bet']}。"
+                result['outcome'] = 'lose_to_blackjack'
+                result['payout'] = -player['bet']
             elif dealer_busted:
                 # 莊家爆牌
                 win_amount = player['bet']
                 player['chips'] += player['bet'] * 2
                 result_message += f" 莊家爆牌，贏得 {win_amount}。"
+                result['outcome'] = 'win_dealer_busted'
+                result['payout'] = win_amount
             else:
                 # 比點數
                 compare_result = compare_hands(player['hand'], self.game_state['dealer_hand'])
@@ -476,26 +575,62 @@ class BlackJackGame(BaseGame):
                     win_amount = player['bet']
                     player['chips'] += player['bet'] * 2
                     result_message += f" 點數較高，贏得 {win_amount}。"
+                    result['outcome'] = 'win_higher'
+                    result['payout'] = win_amount
                 elif compare_result < 0:
                     # 莊家贏
                     result_message += f" 點數較低，損失 {player['bet']}。"
+                    result['outcome'] = 'lose_lower'
+                    result['payout'] = -player['bet']
                 else:
                     # 平局
                     player['chips'] += player['bet']
                     result_message += f" 點數相同，平局，返還 {player['bet']}。"
+                    result['outcome'] = 'push'
+                    result['payout'] = 0
             
             settlement_messages.append(result_message)
+            results[sid] = result
             print(f"[21點房間 {self.room_id}] {result_message}")
         
         # 廣播結算結果
         self.broadcast_state(message="\n".join(settlement_messages))
         
+        # 準備遊戲結束的詳細數據
+        game_over_data = {
+            'room_id': self.room_id,
+            'game_type': self.get_game_type(),
+            'dealer': {
+                'hand': self.game_state['dealer_hand'],
+                'hand_value': self.game_state['dealer_hand_value'],
+                'has_blackjack': self.game_state['dealer_has_blackjack'],
+                'is_busted': dealer_busted
+            },
+            'players': [
+                {
+                    'sid': sid,
+                    'name': player['name'],
+                    'hand': player['hand'],
+                    'hand_value': player['hand_value'],
+                    'bet': player['bet'],
+                    'chips': player['chips'],
+                    'is_busted': player['is_busted'],
+                    'has_blackjack': player['has_blackjack'],
+                    'has_insurance': player['has_insurance'],
+                    'insurance_bet': player['insurance_bet']
+                }
+                for sid, player in self.players.items() if player['is_active_in_round']
+            ],
+            'results': results,
+            'message': "\n".join(settlement_messages)
+        }
+        
         # 等一會兒後開始新一局
         self.is_game_in_progress = False
         print(f"[21點房間 {self.room_id}] 本局遊戲已結束。")
         
-        # 可以在這裡設置定時器，幾秒後自動開始新一局
-        # self.socketio.start_background_task(self._auto_start_new_round)
+        # 發送完整結果
+        self.end_game(game_over_data)
         
         return True
 
@@ -517,7 +652,8 @@ class BlackJackGame(BaseGame):
                 'has_doubled_down': p_data['has_doubled_down'],
                 'has_insurance': p_data['has_insurance'],
                 'insurance_bet': p_data['insurance_bet'],
-                'hand_value': p_data['hand_value']
+                'hand_value': p_data['hand_value'],
+                'has_acted_this_round': p_data['has_acted_this_round']
             }
             
             # 隱藏特定玩家資訊
@@ -561,7 +697,8 @@ class BlackJackGame(BaseGame):
             'game_phase': self.game_state.get('game_phase'),
             'min_bet': self.game_state.get('min_bet'),
             'max_bet': self.game_state.get('max_bet'),
-            'options': self.options
+            'options': self.options,
+            'can_act': player_sid == self.game_state.get('current_turn_sid')
         }
         
         return state_for_player

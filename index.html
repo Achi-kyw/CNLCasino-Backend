@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>德州撲克遊戲</title>
+    <title>CNL Casino - 多遊戲平台</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Socket.IO CDN -->
@@ -13,7 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.5/babel.min.js"></script>
 </head>
-<body class="bg-gray-100 font-sans">
+<body class="bg-gray-900 font-sans text-white">
     <div id="root" class="container mx-auto p-4"></div>
 
     <script type="text/babel">
@@ -27,6 +27,8 @@
             const [betAmount, setBetAmount] = useState('');
             const [error, setError] = useState('');
             const [socket, setSocket] = useState(null);
+            const [selectedGame, setSelectedGame] = useState('texas_holdem');
+            const [insuranceAmount, setInsuranceAmount] = useState('');
 
             // 初始化：檢查用戶狀態並獲取桌子列表
             useEffect(() => {
@@ -40,14 +42,31 @@
             useEffect(() => {
                 if (socket && currentTable) {
                     socket.emit('join_table', { table_id: currentTable.table_id });
+                    
                     socket.on('game_state', (state) => {
                         setGameState(state);
                     });
+                    
+                    socket.on('texas_holdem_update', (state) => {
+                        if (state.game_type === 'texas_holdem') {
+                            setGameState(state);
+                        }
+                    });
+                    
+                    socket.on('black_jack_update', (state) => {
+                        if (state.game_type === 'black_jack') {
+                            setGameState(state);
+                        }
+                    });
+                    
                     socket.on('message', (data) => {
                         console.log(data.message);
                     });
+                    
                     return () => {
                         socket.off('game_state');
+                        socket.off('texas_holdem_update');
+                        socket.off('black_jack_update');
                         socket.off('message');
                     };
                 }
@@ -92,10 +111,14 @@
             // 加入桌子
             const joinTable = async (tableId) => {
                 try {
-                    const response = await fetch(`http://localhost:4000/join_table/${tableId}`, {
+                    const response = await fetch(`http://localhost:4000/join_room_request`, {
                         method: 'POST',
                         credentials: 'include',
-                        headers: { 'Content-Type': 'application/json' }
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            room_id: tableId, 
+                            player_name: user ? user.name : 'Guest'
+                        })
                     });
                     const data = await response.json();
                     if (data.error) {
@@ -109,51 +132,113 @@
                 }
             };
 
+            // 創建房間
+            const createRoom = () => {
+                if (!socket) return;
+                
+                let options = {};
+                if (selectedGame === 'texas_holdem') {
+                    options = {
+                        buy_in: 1000,
+                        small_blind: 10,
+                        big_blind: 20
+                    };
+                } else if (selectedGame === 'black_jack') {
+                    options = {
+                        buy_in: 1000,
+                        min_bet: 10,
+                        max_bet: 500
+                    };
+                }
+                
+                socket.emit('create_room', {
+                    game_type: selectedGame,
+                    player_name: user ? user.name : 'Guest',
+                    options: options
+                });
+            };
+
             // 開始遊戲
-            const startGame = async () => {
-                try {
-                    const response = await fetch(`http://localhost:4000/start_game/${currentTable.table_id}`, {
-                        method: 'POST',
-                        credentials: 'include',
-                        headers: { 'Content-Type': 'application/json' }
-                    });
-                    const data = await response.json();
-                    if (data.error) {
-                        setError(data.error);
-                    } else {
-                        setGameState(data);
-                        setError('');
+            const startGame = () => {
+                if (!socket || !currentTable) return;
+                
+                socket.emit('start_game_request', { 
+                    room_id: currentTable.table_id 
+                });
+            };
+
+            // 普通遊戲動作
+            const sendGameAction = (actionType, payload = {}) => {
+                if (!socket || !currentTable || !gameState) return;
+                
+                socket.emit('game_action', {
+                    room_id: currentTable.table_id,
+                    action_type: actionType,
+                    payload: payload
+                });
+            };
+
+            // 德州撲克特定動作
+            const placeBet = () => {
+                const amount = parseInt(betAmount);
+                if (isNaN(amount) || amount <= 0) {
+                    setError("請輸入有效的下注金額");
+                    return;
+                }
+                
+                sendGameAction('bet', { amount: amount });
+                setBetAmount('');
+            };
+            
+            const pokerAction = (action) => {
+                if (action === 'bet' || action === 'raise') {
+                    const amount = parseInt(betAmount);
+                    if (isNaN(amount) || amount <= 0) {
+                        setError("請輸入有效的金額");
+                        return;
                     }
-                } catch (err) {
-                    setError('無法開始遊戲');
+                    sendGameAction(action, { amount: amount });
+                    setBetAmount('');
+                } else {
+                    sendGameAction(action);
                 }
             };
 
-            // 下注
-            const placeBet = async () => {
-                try {
-                    const response = await fetch(`http://localhost:4000/bet/${currentTable.table_id}`, {
-                        method: 'POST',
-                        credentials: 'include',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ amount: parseInt(betAmount) })
-                    });
-                    const data = await response.json();
-                    if (data.error) {
-                        setError(data.error);
-                    } else {
-                        setGameState(data);
-                        setBetAmount('');
-                        setError('');
+            // 21點特定動作
+            const blackjackAction = (action) => {
+                if (action === 'double') {
+                    sendGameAction('double');
+                } else if (action === 'insurance') {
+                    const amount = parseInt(insuranceAmount);
+                    if (isNaN(amount) || amount <= 0) {
+                        setError("請輸入有效的保險金額");
+                        return;
                     }
-                } catch (err) {
-                    setError('下注失敗');
+                    sendGameAction('insurance', { amount: amount });
+                    setInsuranceAmount('');
+                } else {
+                    sendGameAction(action);
                 }
+            };
+
+            // 離開房間
+            const leaveRoom = () => {
+                if (!socket || !currentTable) return;
+                
+                socket.emit('leave_room_request', { 
+                    room_id: currentTable.table_id 
+                });
+                setCurrentTable(null);
+                setGameState(null);
             };
 
             // 登出
             const logout = async () => {
                 try {
+                    if (currentTable) {
+                        leaveRoom();
+                    }
+                    
                     const response = await fetch('http://localhost:4000/logout', {
                         method: 'POST',
                         credentials: 'include'
@@ -166,30 +251,294 @@
                         setCurrentTable(null);
                         setGameState(null);
                         setError('');
-                        // 模擬重定向到首頁
-                        window.location.href = '/index.html';
                     }
                 } catch (err) {
-                    setError('登出失敗，但 session 已清除');
-                    setUser(null);
-                    setCurrentTable(null);
-                    setGameState(null);
-                    window.location.href = '/index.html';
+                    setError('登出失敗');
                 }
+            };
+
+            // 渲染21點手牌
+            const renderBlackjackHand = (cards) => {
+                if (!cards || cards.length === 0) return '無牌';
+                return cards.map(card => `${card.rank}${card.suit}`).join(' ');
+            };
+
+            // 渲染21點玩家狀態
+            const renderBlackjackPlayerStatus = (player) => {
+                let status = [];
+                if (player.is_busted) status.push('爆牌');
+                if (player.has_blackjack) status.push('21點');
+                if (player.has_stood) status.push('已停牌');
+                if (player.has_doubled) status.push('已加倍');
+                if (player.has_insurance) status.push('已投保');
+                return status.length > 0 ? `(${status.join(', ')})` : '';
+            };
+
+            // 渲染遊戲介面
+            const renderGameInterface = () => {
+                if (!gameState) {
+                    return (
+                        <div className="text-center">
+                            <button
+                                onClick={startGame}
+                                className="bg-green-600 text-white px-6 py-3 rounded-lg text-lg font-semibold hover:bg-green-700 transition"
+                            >
+                                開始遊戲
+                            </button>
+                        </div>
+                    );
+                }
+
+                if (gameState.game_type === 'texas_holdem') {
+                    return renderTexasHoldem();
+                } else if (gameState.game_type === 'black_jack') {
+                    return renderBlackJack();
+                }
+
+                return <div>不支援的遊戲類型</div>;
+            };
+
+            // 渲染德州撲克介面
+            const renderTexasHoldem = () => {
+                const myPlayer = gameState.players?.find(p => p.sid === socket.id);
+                const isMyTurn = gameState.current_turn_sid === socket.id;
+
+                return (
+                    <div className="space-y-6">
+                        <div className="bg-green-800 p-4 rounded-lg">
+                            <h3 className="text-xl font-medium mb-2">公共牌</h3>
+                            <p className="text-2xl mb-2">
+                                {gameState.community_cards && gameState.community_cards.length > 0 
+                                    ? gameState.community_cards.map(c => `${c.rank}${c.suit}`).join(' ') 
+                                    : '等待發牌...'}
+                            </p>
+                            <p className="text-lg">底池：${gameState.pot || 0}</p>
+                        </div>
+
+                        <div className="bg-gray-800 p-4 rounded-lg">
+                            <h3 className="text-xl font-medium mb-2">你的手牌</h3>
+                            <p className="text-2xl">
+                                {myPlayer && myPlayer.hand 
+                                    ? myPlayer.hand.map(c => `${c.rank}${c.suit}`).join(' ') 
+                                    : '等待發牌...'}
+                            </p>
+                            <p className="mt-2">籌碼：${myPlayer?.chips || 0}</p>
+                        </div>
+
+                        <div className="bg-gray-800 p-4 rounded-lg">
+                            <h3 className="text-xl font-medium mb-2">玩家</h3>
+                            <div className="space-y-2">
+                                {gameState.players?.map((player, index) => (
+                                    <div 
+                                        key={index} 
+                                        className={`p-2 rounded ${player.sid === gameState.current_turn_sid ? 'bg-yellow-800' : 'bg-gray-700'}`}
+                                    >
+                                        <p>
+                                            {player.name} - 籌碼: ${player.chips || 0}, 
+                                            下注: ${player.bet_in_current_street || 0}
+                                            {player.sid === gameState.current_turn_sid ? ' (當前輪到)' : ''}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="bg-gray-800 p-4 rounded-lg">
+                            <h3 className="text-xl font-medium mb-2">動作</h3>
+                            <div className="flex flex-wrap gap-2 mb-4">
+                                <button 
+                                    onClick={() => pokerAction('fold')}
+                                    disabled={!isMyTurn}
+                                    className="bg-red-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                                >
+                                    棄牌
+                                </button>
+                                <button 
+                                    onClick={() => pokerAction('check')}
+                                    disabled={!isMyTurn}
+                                    className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                                >
+                                    過牌
+                                </button>
+                                <button 
+                                    onClick={() => pokerAction('call')}
+                                    disabled={!isMyTurn}
+                                    className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                                >
+                                    跟注
+                                </button>
+                                <button 
+                                    onClick={() => pokerAction('raise')}
+                                    disabled={!isMyTurn}
+                                    className="bg-green-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                                >
+                                    加注
+                                </button>
+                            </div>
+                            <div className="flex gap-2">
+                                <input
+                                    type="number"
+                                    value={betAmount}
+                                    onChange={(e) => setBetAmount(e.target.value)}
+                                    placeholder="金額"
+                                    className="border p-2 rounded text-black flex-grow"
+                                    disabled={!isMyTurn}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            // 渲染21點介面
+            const renderBlackJack = () => {
+                const myPlayer = gameState.players?.find(p => p.sid === socket.id);
+                const isMyTurn = gameState.current_turn_sid === socket.id;
+                const dealer = gameState.dealer || {};
+
+                return (
+                    <div className="space-y-6">
+                        <div className="bg-green-800 p-4 rounded-lg">
+                            <h3 className="text-xl font-medium mb-2">莊家</h3>
+                            <p className="text-2xl mb-2">
+                                {dealer.hand 
+                                    ? renderBlackjackHand(dealer.hand) 
+                                    : '等待發牌...'}
+                            </p>
+                            {dealer.hand_value !== undefined && (
+                                <p>點數: {dealer.hand_value}</p>
+                            )}
+                        </div>
+
+                        <div className="bg-gray-800 p-4 rounded-lg">
+                            <h3 className="text-xl font-medium mb-2">你的手牌</h3>
+                            <p className="text-2xl">
+                                {myPlayer && myPlayer.hand 
+                                    ? renderBlackjackHand(myPlayer.hand)
+                                    : '等待發牌...'}
+                            </p>
+                            {myPlayer?.hand_value !== undefined && (
+                                <p>點數: {myPlayer.hand_value}</p>
+                            )}
+                            <p className="mt-2">
+                                籌碼：${myPlayer?.chips || 0}
+                                {myPlayer ? renderBlackjackPlayerStatus(myPlayer) : ''}
+                            </p>
+                            <p className="mt-2">當前下注：${myPlayer?.current_bet || 0}</p>
+                        </div>
+
+                        <div className="bg-gray-800 p-4 rounded-lg">
+                            <h3 className="text-xl font-medium mb-2">玩家</h3>
+                            <div className="space-y-2">
+                                {gameState.players?.map((player, index) => (
+                                    <div 
+                                        key={index} 
+                                        className={`p-2 rounded ${player.sid === gameState.current_turn_sid ? 'bg-yellow-800' : 'bg-gray-700'}`}
+                                    >
+                                        <p>
+                                            {player.name} - 籌碼: ${player.chips || 0}, 
+                                            下注: ${player.current_bet || 0}
+                                            {player.sid === gameState.current_turn_sid ? ' (當前輪到)' : ''}
+                                            {renderBlackjackPlayerStatus(player)}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="bg-gray-800 p-4 rounded-lg">
+                            <h3 className="text-xl font-medium mb-2">動作</h3>
+                            {gameState.game_phase === 'betting' && (
+                                <div className="flex flex-wrap gap-2 mb-4">
+                                    <input
+                                        type="number"
+                                        value={betAmount}
+                                        onChange={(e) => setBetAmount(e.target.value)}
+                                        placeholder="下注金額"
+                                        className="border p-2 rounded text-black flex-grow"
+                                        disabled={!isMyTurn}
+                                    />
+                                    <button 
+                                        onClick={() => blackjackAction('bet')}
+                                        disabled={!isMyTurn}
+                                        className="bg-green-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                                    >
+                                        下注
+                                    </button>
+                                </div>
+                            )}
+                            
+                            {gameState.game_phase === 'player_actions' && (
+                                <div className="flex flex-wrap gap-2 mb-4">
+                                    <button 
+                                        onClick={() => blackjackAction('hit')}
+                                        disabled={!isMyTurn || myPlayer?.is_busted || myPlayer?.has_stood}
+                                        className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                                    >
+                                        要牌
+                                    </button>
+                                    <button 
+                                        onClick={() => blackjackAction('stand')}
+                                        disabled={!isMyTurn || myPlayer?.is_busted || myPlayer?.has_stood}
+                                        className="bg-red-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                                    >
+                                        停牌
+                                    </button>
+                                    {myPlayer && !myPlayer.has_doubled && (
+                                        <button 
+                                            onClick={() => blackjackAction('double')}
+                                            disabled={!isMyTurn || myPlayer?.hand.length !== 2 || myPlayer?.is_busted || myPlayer?.has_stood}
+                                            className="bg-yellow-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                                        >
+                                            加倍
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+                            
+                            {gameState.game_phase === 'insurance_option' && (
+                                <div className="flex flex-wrap gap-2 mb-4">
+                                    <input
+                                        type="number"
+                                        value={insuranceAmount}
+                                        onChange={(e) => setInsuranceAmount(e.target.value)}
+                                        placeholder="保險金額"
+                                        className="border p-2 rounded text-black flex-grow"
+                                        disabled={!isMyTurn}
+                                    />
+                                    <button 
+                                        onClick={() => blackjackAction('insurance')}
+                                        disabled={!isMyTurn}
+                                        className="bg-purple-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                                    >
+                                        購買保險
+                                    </button>
+                                    <button 
+                                        onClick={() => blackjackAction('decline_insurance')}
+                                        disabled={!isMyTurn}
+                                        className="bg-gray-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                                    >
+                                        不購買保險
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
             };
 
             return (
                 <div className="max-w-4xl mx-auto">
-                    <h1 className="text-3xl font-bold mb-4 text-center">德州撲克遊戲</h1>
+                    <h1 className="text-3xl font-bold mb-4 text-center">CNL Casino - 多遊戲平台</h1>
 
                     {/* 用戶資訊 */}
                     <div className="mb-4 flex justify-between">
                         {user ? (
                             <div>
-                                <span className="text-lg">歡迎，{user.name} ({user.email})</span>
+                                <span className="text-lg">歡迎，{user.name}</span>
                                 <button
                                     onClick={logout}
-                                    className="ml-4 bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+                                    className="ml-4 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 transition"
                                 >
                                     登出
                                 </button>
@@ -197,7 +546,7 @@
                         ) : (
                             <a
                                 href="http://localhost:4000/login"
-                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
                             >
                                 使用 Google 登錄
                             </a>
@@ -206,80 +555,80 @@
 
                     {/* 錯誤訊息 */}
                     {error && (
-                        <div className="bg-red-100 text-red-700 p-4 mb-4 rounded">
+                        <div className="bg-red-900 text-white p-4 mb-4 rounded">
                             {error}
                         </div>
                     )}
 
-                    {/* 桌子列表 */}
-                    {!currentTable && user && (
+                    {/* 遊戲選擇和房間 */}
+                    {!currentTable && (
                         <div className="mb-8">
-                            <h2 className="text-2xl font-semibold mb-2">可用桌子</h2>
-                            <div className="grid grid-cols-1 gap-4">
-                                {tables.map((table) => (
-                                    <div
-                                        key={table.table_id}
-                                        className="bg-white p-4 rounded shadow flex justify-between items-center"
+                            <div className="bg-gray-800 p-6 rounded-lg mb-6">
+                                <h2 className="text-2xl font-semibold mb-4">創建新遊戲</h2>
+                                <div className="flex flex-col md:flex-row gap-4">
+                                    <select 
+                                        value={selectedGame}
+                                        onChange={(e) => setSelectedGame(e.target.value)}
+                                        className="p-2 rounded text-black"
                                     >
-                                        <div>
-                                            <h3 className="text-lg font-medium">{table.name}</h3>
-                                            <p>最大玩家數：{table.max_players}</p>
-                                        </div>
-                                        <button
-                                            onClick={() => joinTable(table.table_id)}
-                                            className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
-                                        >
-                                            加入
-                                        </button>
-                                    </div>
-                                ))}
+                                        <option value="texas_holdem">德州撲克</option>
+                                        <option value="black_jack">21點</option>
+                                    </select>
+                                    <button
+                                        onClick={createRoom}
+                                        className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 transition"
+                                    >
+                                        創建房間
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div className="bg-gray-800 p-6 rounded-lg">
+                                <h2 className="text-2xl font-semibold mb-4">加入遊戲</h2>
+                                <div className="grid grid-cols-1 gap-4">
+                                    {tables.length > 0 ? (
+                                        tables.map((table) => (
+                                            <div
+                                                key={table.table_id}
+                                                className="bg-gray-700 p-4 rounded-lg flex justify-between items-center"
+                                            >
+                                                <div>
+                                                    <h3 className="text-lg font-medium">房間 #{table.table_id}</h3>
+                                                    <p>遊戲類型：{table.game_type === 'texas_holdem' ? '德州撲克' : '21點'}</p>
+                                                </div>
+                                                <button
+                                                    onClick={() => joinTable(table.table_id)}
+                                                    className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition"
+                                                >
+                                                    加入
+                                                </button>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <p>目前沒有可用的遊戲房間</p>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     )}
 
                     {/* 遊戲介面 */}
                     {currentTable && (
-                        <div className="bg-white p-6 rounded shadow">
-                            <h2 className="text-2xl font-semibold mb-4">桌子 #{currentTable.table_id}</h2>
-                            <p className="mb-4">你的座位：{currentTable.seat}</p>
-
-                            {gameState ? (
-                                <div>
-                                    <h3 className="text-xl font-medium mb-2">遊戲狀態</h3>
-                                    <p className="mb-2">公牌：{gameState.community_cards.join(', ')}</p>
-                                    <p className="mb-2">獎池：{gameState.pot}</p>
-                                    <div className="mb-4">
-                                        <h4 className="font-medium">玩家手牌</h4>
-                                        {gameState.players.map((player) => (
-                                            <p key={player.email}>
-                                                {player.email}：{player.email === user.email ? player.hand.join(', ') : '隱藏'}
-                                            </p>
-                                        ))}
-                                    </div>
-                                    <div className="flex items-center mb-4">
-                                        <input
-                                            type="number"
-                                            value={betAmount}
-                                            onChange={(e) => setBetAmount(e.target.value)}
-                                            placeholder="輸入賭注金額"
-                                            className="border p-2 rounded mr-2"
-                                        />
-                                        <button
-                                            onClick={placeBet}
-                                            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-                                        >
-                                            下注
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : (
+                        <div className="bg-gray-800 p-6 rounded-lg">
+                            <div className="flex justify-between items-center mb-6">
+                                <h2 className="text-2xl font-semibold">
+                                    房間 #{currentTable.table_id} 
+                                    {gameState && ` - ${gameState.game_type === 'texas_holdem' ? '德州撲克' : '21點'}`}
+                                </h2>
                                 <button
-                                    onClick={startGame}
-                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                    onClick={leaveRoom}
+                                    className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 transition"
                                 >
-                                    開始遊戲
+                                    離開房間
                                 </button>
-                            )}
+                            </div>
+                            
+                            {renderGameInterface()}
                         </div>
                     )}
                 </div>

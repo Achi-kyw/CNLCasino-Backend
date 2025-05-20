@@ -44,7 +44,8 @@
                 <label for="gameType">選擇遊戲:</label>
                 <select id="gameType">
                     <option value="texas_holdem">德州撲克</option>
-                    </select>
+                    <option value="black_jack">21點</option>
+                </select>
                 <div id="texas-holdem-options">
                     <label for="buyIn">初始籌碼:</label>
                     <input type="number" id="buyIn" value="1000">
@@ -52,6 +53,14 @@
                     <input type="number" id="smallBlind" value="10">
                     <label for="bigBlind">大盲注:</label>
                     <input type="number" id="bigBlind" value="20">
+                </div>
+                <div id="black-jack-options" class="hidden">
+                    <label for="bjBuyIn">初始籌碼:</label>
+                    <input type="number" id="bjBuyIn" value="1000">
+                    <label for="minBet">最小下注:</label>
+                    <input type="number" id="minBet" value="10">
+                    <label for="maxBet">最大下注:</label>
+                    <input type="number" id="maxBet" value="500">
                 </div>
                 <button id="createRoomButton">創建房間</button>
             </div>
@@ -73,30 +82,47 @@
             <div class="game-state">
                 <h3>遊戲狀態 (<span id="currentGamePhase">---</span>)</h3>
                 <p>底池: <span id="pot">0</span></p>
-                <p>公共牌: <span id="communityCards">---</span></p>
-                <p>輪到: <span id="currentPlayerTurn">---</span></p>
-                <p>當前需跟注: <span id="currentBetToMatch">0</span></p>
-                <p>最小加注額(增量): <span id="minRaiseIncrementDisplay">0</span></p>
+                <div id="texas-holdem-state">
+                    <p>公共牌: <span id="communityCards">---</span></p>
+                    <p>輪到: <span id="currentPlayerTurn">---</span></p>
+                    <p>當前需跟注: <span id="currentBetToMatch">0</span></p>
+                    <p>最小加注額(增量): <span id="minRaiseIncrementDisplay">0</span></p>
+                </div>
+                <div id="black-jack-state" class="hidden">
+                    <p>莊家牌: <span id="dealerCards">---</span></p>
+                    <p>莊家點數: <span id="dealerPoints">0</span></p>
+                </div>
             </div>
 
             <div class="player-hand">
                 <h3>我的手牌</h3>
                 <p id="myHandDisplay">---</p>
+                <p id="myPointsDisplay" class="hidden">我的點數: 0</p>
             </div>
 
             <div id="players-display">
                 <h3>玩家列表</h3>
-                </div>
+            </div>
 
             <div class="actions">
                 <h3>我的操作</h3>
                 <div id="game-actions-panel">
                     <input type="number" id="actionAmount" placeholder="金額" value="0">
-                    <button data-action="fold">棄牌 (Fold)</button>
-                    <button data-action="check">過牌 (Check)</button>
-                    <button data-action="call">跟注 (Call)</button>
-                    <button data-action="bet">下注 (Bet)</button>
-                    <button data-action="raise">加注 (Raise)</button>
+                    <div id="texas-holdem-actions">
+                        <button data-action="fold">棄牌 (Fold)</button>
+                        <button data-action="check">過牌 (Check)</button>
+                        <button data-action="call">跟注 (Call)</button>
+                        <button data-action="bet">下注 (Bet)</button>
+                        <button data-action="raise">加注 (Raise)</button>
+                    </div>
+                    <div id="black-jack-actions" class="hidden">
+                        <button data-action="bet">下注 (Bet)</button>
+                        <button data-action="hit">要牌 (Hit)</button>
+                        <button data-action="stand">停牌 (Stand)</button>
+                        <button data-action="double">加倍 (Double)</button>
+                        <button data-action="insurance">保險 (Insurance)</button>
+                        <button data-action="decline_insurance">拒絕保險</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -117,7 +143,7 @@
         let currentGameType = null;
         let currentGameStateForClient = {}; 
 
-        // UI 元素 (保持不變)
+        // UI 元素
         const connectionSetupDiv = document.getElementById('connection-setup');
         const lobbyDiv = document.getElementById('lobby');
         const gameRoomViewDiv = document.getElementById('game-room-view');
@@ -129,19 +155,28 @@
         const gameRoomPlayerNameSpan = document.getElementById('gameRoomPlayerName'); 
         const createRoomButton = document.getElementById('createRoomButton');
         const gameTypeSelect = document.getElementById('gameType');
+        const texasHoldemOptions = document.getElementById('texas-holdem-options');
+        const blackJackOptions = document.getElementById('black-jack-options');
         const roomListDiv = document.getElementById('roomList');
         const roomTitleH2 = document.getElementById('room-title');
         const leaveRoomButton = document.getElementById('leaveRoomButton');
         const startGameButton = document.getElementById('startGameButton');
         const currentGamePhaseDisplay = document.getElementById('currentGamePhase');
         const potDisplay = document.getElementById('pot');
+        const texasHoldemState = document.getElementById('texas-holdem-state');
+        const blackJackState = document.getElementById('black-jack-state');
         const communityCardsDisplay = document.getElementById('communityCards');
+        const dealerCardsDisplay = document.getElementById('dealerCards');
+        const dealerPointsDisplay = document.getElementById('dealerPoints');
         const currentPlayerTurnDisplay = document.getElementById('currentPlayerTurn');
         const currentBetToMatchDisplay = document.getElementById('currentBetToMatch');
         const minRaiseIncrementDisplay = document.getElementById('minRaiseIncrementDisplay'); 
         const myHandDisplay = document.getElementById('myHandDisplay');
+        const myPointsDisplay = document.getElementById('myPointsDisplay');
         const playersDisplayDiv = document.getElementById('players-display');
         const gameActionsPanel = document.getElementById('game-actions-panel');
+        const texasHoldemActions = document.getElementById('texas-holdem-actions');
+        const blackJackActions = document.getElementById('black-jack-actions');
         const actionAmountInput = document.getElementById('actionAmount');
         const logArea = document.getElementById('log-area');
 
@@ -174,7 +209,7 @@
         }
 
 
-        // --- 日誌函式 (保持不變) ---
+        // --- 日誌函式 ---
         function addToLog(message, type = 'info') {
             const time = new Date().toLocaleTimeString();
             const logEntry = document.createElement('p');
@@ -186,7 +221,7 @@
             }
         }
 
-        // --- UI 更新函式 (showView, updateRoomList, updateGameView 保持不變) ---
+        // --- UI 更新函式 ---
         function showView(viewName) {
             connectionSetupDiv.classList.add('hidden');
             lobbyDiv.classList.add('hidden');
@@ -204,6 +239,7 @@
                 if(gameRoomPlayerNameSpan) gameRoomPlayerNameSpan.textContent = currentPlayerName || "訪客";
             }
         }
+        
         function updateRoomList(rooms) {
             roomListDiv.innerHTML = ''; 
             if (!rooms || Object.keys(rooms).length === 0) { // 增加對 rooms 的檢查
@@ -232,6 +268,7 @@
                 });
             });
         }
+        
         function updateGameView(gameState) {
             if (!gameState) {
                 addToLog("收到空的遊戲狀態", "error");
@@ -245,7 +282,14 @@
             currentGamePhaseDisplay.textContent = gameState.game_phase || '等待開始';
             potDisplay.textContent = gameState.pot || 0;
 
-            if (gameState.game_type === 'texas_holdem') {
+            // 顯示正確的遊戲相關UI
+            if (currentGameType === 'texas_holdem') {
+                texasHoldemState.classList.remove('hidden');
+                blackJackState.classList.add('hidden');
+                texasHoldemActions.classList.remove('hidden');
+                blackJackActions.classList.add('hidden');
+                myPointsDisplay.classList.add('hidden');
+                
                 communityCardsDisplay.textContent = gameState.community_cards && gameState.community_cards.length > 0 ?
                     gameState.community_cards.map(c => `${c.rank}${c.suit}`).join(' ') : '---';
                 currentBetToMatchDisplay.textContent = gameState.current_street_bet_to_match || 0; 
@@ -257,9 +301,59 @@
                 } else {
                     myHandDisplay.textContent = '---';
                 }
-            } else {
-                communityCardsDisplay.textContent = 'N/A';
-                myHandDisplay.textContent = 'N/A';
+            } else if (currentGameType === 'black_jack') {
+                texasHoldemState.classList.add('hidden');
+                blackJackState.classList.remove('hidden');
+                texasHoldemActions.classList.add('hidden');
+                blackJackActions.classList.remove('hidden');
+                myPointsDisplay.classList.remove('hidden');
+                
+                // 更新莊家牌
+                if (gameState.dealer && gameState.dealer.hand) {
+                    dealerCardsDisplay.textContent = gameState.dealer.hand.map(c => `${c.rank}${c.suit}`).join(' ');
+                    dealerPointsDisplay.textContent = gameState.dealer.hand_value || '?';
+                } else {
+                    dealerCardsDisplay.textContent = '---';
+                    dealerPointsDisplay.textContent = '0';
+                }
+                
+                // 更新自己的牌
+                const me = gameState.players.find(p => p.sid === mySid);
+                if (me && me.hand && me.hand.length > 0) {
+                    myHandDisplay.textContent = me.hand.map(c => `${c.rank}${c.suit}`).join(' ');
+                    myPointsDisplay.textContent = `我的點數: ${me.hand_value || 0}`;
+                } else {
+                    myHandDisplay.textContent = '---';
+                    myPointsDisplay.textContent = '我的點數: 0';
+                }
+                
+                // 根據遊戲階段顯示/隱藏按鈕
+                const blackJackButtons = blackJackActions.querySelectorAll('button');
+                blackJackButtons.forEach(btn => btn.classList.add('hidden'));
+                
+                const isMyTurn = gameState.current_turn_sid === mySid;
+                const canAct = gameState.can_act === true;
+                
+                if (gameState.game_phase === 'betting' && isMyTurn && !me.has_acted_this_round) {
+                    blackJackActions.querySelector('[data-action="bet"]').classList.remove('hidden');
+                } else if (gameState.game_phase === 'player_turns' && isMyTurn) {
+                    blackJackActions.querySelector('[data-action="hit"]').classList.remove('hidden');
+                    blackJackActions.querySelector('[data-action="stand"]').classList.remove('hidden');
+                    if (me && me.hand && me.hand.length === 2 && !me.has_doubled_down) {
+                        blackJackActions.querySelector('[data-action="double"]').classList.remove('hidden');
+                    }
+                } else if (gameState.game_phase === 'insurance' && isMyTurn && !me.has_insurance) {
+                    blackJackActions.querySelector('[data-action="insurance"]').classList.remove('hidden');
+                    blackJackActions.querySelector('[data-action="decline_insurance"]').classList.remove('hidden');
+                }
+                
+                // 禁用按鈕如果不是我的回合
+                blackJackButtons.forEach(btn => {
+                    if (!btn.classList.contains('hidden')) {
+                        btn.disabled = !canAct;
+                    }
+                });
+                actionAmountInput.disabled = !canAct;
             }
 
             playersDisplayDiv.innerHTML = '<h3>玩家列表</h3>';
@@ -268,9 +362,21 @@
                 gameState.players.forEach(player => {
                     const playerDiv = document.createElement('div');
                     playerDiv.classList.add('player-info');
-                    let playerText = `${player.name || '未知玩家'} (籌碼: ${player.chips}, 本街道下注: ${player.bet_in_current_street || 0})`;
-                    if (!player.is_active_in_round && gameState.is_game_in_progress) playerText += " (已棄牌/旁觀)";
-                    if (player.is_all_in) playerText += " (All-in)";
+                    
+                    let playerText = `${player.name || '未知玩家'} (籌碼: ${player.chips})`;
+                    
+                    if (currentGameType === 'texas_holdem') {
+                        playerText += `, 本街道下注: ${player.bet_in_current_street || 0}`;
+                        if (!player.is_active_in_round && gameState.is_game_in_progress) playerText += " (已棄牌/旁觀)";
+                        if (player.is_all_in) playerText += " (All-in)";
+                    } else if (currentGameType === 'black_jack') {
+                        playerText += `, 下注: ${player.bet || 0}`;
+                        if (player.is_busted) playerText += " (爆牌)";
+                        if (player.has_blackjack) playerText += " (21點)";
+                        if (player.has_doubled_down) playerText += " (已加倍)";
+                        if (player.has_insurance) playerText += " (已投保)";
+                        if (player.has_acted_this_round) playerText += " (已行動)";
+                    }
 
                     if (player.sid === gameState.current_turn_sid) { 
                         playerDiv.classList.add('current-turn');
@@ -283,10 +389,6 @@
             currentPlayerTurnDisplay.textContent = currentTurnPlayerName;
 
             const gameIsActuallyInProgress = gameState.is_game_in_progress === true;
-            const myTurn = gameState.current_turn_sid === mySid && gameIsActuallyInProgress;
-
-            gameActionsPanel.querySelectorAll('button').forEach(btn => btn.disabled = !myTurn);
-            actionAmountInput.disabled = !myTurn;
             startGameButton.disabled = gameIsActuallyInProgress; 
 
             if (gameState.message) { 
@@ -372,12 +474,20 @@
             showView('lobby');
             myHandDisplay.textContent = '---';
             communityCardsDisplay.textContent = '---';
+            dealerCardsDisplay.textContent = '---';
             playersDisplayDiv.innerHTML = '<h3>玩家列表</h3>';
         });
         socket.on('texas_holdem_update', (gameState) => {
-            if (currentRoomId === gameState.room_id || (currentRoomId === null && gameState.room_id)) { // 加入對 currentRoomId 可能為 null 的判斷
-                if (currentRoomId === null) currentRoomId = gameState.room_id; // 如果是剛加入，設定 currentRoomId
+            if (currentRoomId === gameState.room_id || (currentRoomId === null && gameState.room_id)) { 
+                if (currentRoomId === null) currentRoomId = gameState.room_id; 
                 addToLog('收到德州撲克遊戲狀態更新。階段: ' + gameState.game_phase + ', 輪到: ' + gameState.current_turn_sid);
+                updateGameView(gameState);
+            }
+        });
+        socket.on('black_jack_update', (gameState) => {
+            if (currentRoomId === gameState.room_id || (currentRoomId === null && gameState.room_id)) { 
+                if (currentRoomId === null) currentRoomId = gameState.room_id; 
+                addToLog('收到21點遊戲狀態更新。階段: ' + gameState.game_phase + ', 輪到: ' + gameState.current_turn_sid);
                 updateGameView(gameState);
             }
         });
@@ -385,18 +495,22 @@
             addToLog(`德州撲克錯誤: ${data.message}`, 'error');
             alert(`遊戲錯誤: ${data.message}`);
         });
+        socket.on('black_jack_error', (data) => { 
+            addToLog(`21點錯誤: ${data.message}`, 'error');
+            alert(`遊戲錯誤: ${data.message}`);
+        });
         socket.on('texas_holdem_game_over', (data) => { 
-            addToLog('德州撲克遊戲結束 EVENT RECEIVED. Data: ' + JSON.stringify(data));
+            if (currentGameType !== 'texas_holdem') return;
+            
+            addToLog('德州撲克遊戲結束');
             gameActionsPanel.querySelectorAll('button').forEach(btn => btn.disabled = true);
             actionAmountInput.disabled = true;
             startGameButton.disabled = false; 
             currentPlayerTurnDisplay.textContent = '遊戲結束';
             
-            // data 應包含 is_game_in_progress: false 以及獲勝者等資訊
             updateGameView(data); 
 
             let resultText = "遊戲結束!\n";
-            // 直接從 data (即後端傳來的 payload_to_send) 中獲取獲勝者資訊
             if (data && data.winners && data.winners.length > 0) {
                 data.winners.forEach(winner => {
                     let handString = 'N/A';
@@ -409,12 +523,81 @@
                 });
             } else if (data && data.message) { 
                 resultText += data.message;
-            } else if (data && data.game_over_results && data.game_over_results.message) { // 兼容舊的可能結構
+            } else if (data && data.game_over_results && data.game_over_results.message) {
                  resultText += data.game_over_results.message;
             }
-             else {
+            else {
                 resultText += "無明確贏家或結果信息。";
             }
+            alert(resultText);
+        });
+        
+        socket.on('black_jack_game_over', (data) => { 
+            if (currentGameType !== 'black_jack') return;
+            
+            addToLog('21點遊戲結束');
+            gameActionsPanel.querySelectorAll('button').forEach(btn => btn.disabled = true);
+            actionAmountInput.disabled = true;
+            startGameButton.disabled = false; 
+            
+            updateGameView(data); 
+
+            let resultText = "遊戲結束!\n\n";
+            
+            // 添加莊家資訊
+            if (data.dealer) {
+                const dealerStatus = data.dealer.is_busted ? "爆牌" : 
+                                    data.dealer.has_blackjack ? "21點" : 
+                                    `點數: ${data.dealer.hand_value}`;
+                resultText += `莊家: ${dealerStatus}\n`;
+                resultText += `莊家手牌: ${data.dealer.hand.map(c => `${c.rank}${c.suit}`).join(' ')}\n\n`;
+            }
+            
+            // 添加所有玩家的結果
+            if (data.results) {
+                resultText += "玩家結果:\n";
+                data.players.forEach(player => {
+                    const result = data.results[player.sid];
+                    if (!result) return;
+                    
+                    // 確定結果文字
+                    let outcomeText = "";
+                    switch(result.outcome) {
+                        case 'blackjack': outcomeText = "21點獲勝"; break;
+                        case 'win_dealer_busted': outcomeText = "莊家爆牌，玩家獲勝"; break;
+                        case 'win_higher': outcomeText = "點數較高，玩家獲勝"; break;
+                        case 'push': outcomeText = "平局"; break;
+                        case 'bust': outcomeText = "爆牌，玩家輸"; break;
+                        case 'lose_to_blackjack': outcomeText = "莊家21點，玩家輸"; break;
+                        case 'lose_lower': outcomeText = "點數較低，玩家輸"; break;
+                        default: outcomeText = result.outcome;
+                    }
+                    
+                    // 籌碼變化
+                    const payoutText = result.payout > 0 ? `贏得 ${result.payout}` : 
+                                    result.payout < 0 ? `損失 ${Math.abs(result.payout)}` : 
+                                    "籌碼不變";
+                    
+                    resultText += `${player.name}: ${outcomeText}, ${payoutText}\n`;
+                    resultText += `手牌: ${player.hand.map(c => `${c.rank}${c.suit}`).join(' ')} (點數: ${player.hand_value})\n`;
+                    
+                    // 如果有保險，添加保險結果
+                    if (result.insurance_outcome) {
+                        const insText = result.insurance_outcome === 'win' ? 
+                                      `保險贏得 ${result.insurance_payout}` : 
+                                      `保險損失 ${Math.abs(result.insurance_payout)}`;
+                        resultText += `${insText}\n`;
+                    }
+                    
+                    resultText += `目前籌碼: ${player.chips}\n\n`;
+                });
+            } else if (data && data.message) { 
+                resultText += data.message;
+            } else {
+                resultText += "無明確結果信息。";
+            }
+            
+            // 使用對話框顯示結果
             alert(resultText);
         });
 
@@ -445,7 +628,6 @@
         });
 
         createRoomButton.addEventListener('click', () => {
-            // ... (createRoomButton 邏輯保持不變)
             const gameType = gameTypeSelect.value;
             let options = {};
             if (gameType === 'texas_holdem') {
@@ -454,6 +636,12 @@
                     small_blind: parseInt(document.getElementById('smallBlind').value) || 10,
                     big_blind: parseInt(document.getElementById('bigBlind').value) || 20,
                 };
+            } else if (gameType === 'black_jack') {
+                options = {
+                    buy_in: parseInt(document.getElementById('bjBuyIn').value) || 1000,
+                    min_bet: parseInt(document.getElementById('minBet').value) || 10,
+                    max_bet: parseInt(document.getElementById('maxBet').value) || 500,
+                };
             }
             socket.emit('create_room', {
                 game_type: gameType,
@@ -461,28 +649,39 @@
                 options: options
             });
         });
+        
         leaveRoomButton.addEventListener('click', () => {
-            // ... (leaveRoomButton 邏輯保持不變)
             if (currentRoomId) {
                 socket.emit('leave_room_request', { room_id: currentRoomId });
             }
         });
+        
         startGameButton.addEventListener('click', () => {
-            // ... (startGameButton LOGIC REMAINS THE SAME)
             if (currentRoomId) {
                 socket.emit('start_game_request', { room_id: currentRoomId });
                 startGameButton.disabled = true; 
             }
         });
+        
         gameActionsPanel.addEventListener('click', (event) => {
-            // ... (gameActionsPanel 邏輯保持不變)
             if (event.target.tagName === 'BUTTON' && event.target.dataset.action) {
                 const action = event.target.dataset.action;
                 let payload = {};
+                
                 if (['bet', 'raise'].includes(action)) { 
                     const amount = parseInt(actionAmountInput.value);
-                    if (isNaN(amount) || (action === 'bet' && amount <=0) || (action === 'raise' && amount <=0) ) { 
+                    if (isNaN(amount) || amount <= 0) { 
                         alert('請輸入有效的金額!');
+                        return;
+                    }
+                    payload.amount = amount;
+                }
+                
+                // 21點特殊動作
+                if (action === 'insurance') {
+                    const amount = parseInt(actionAmountInput.value);
+                    if (isNaN(amount) || amount <= 0) { 
+                        alert('請輸入有效的保險金額!');
                         return;
                     }
                     payload.amount = amount;
@@ -498,19 +697,9 @@
         });
 
         // --- 初始化 ---
-        // 頁面加載時執行
         window.addEventListener('DOMContentLoaded', (event) => {
             loadPlayerNameFromStorage(); // 嘗試載入已儲存的名稱
             showView('connection'); // 預設顯示連線介面
-
-            // 如果 localStorage 中有名稱，並且 socket 已自動連接 (或將要連接)
-            // 則 'connect' 事件處理器會負責切換到大廳
-            // 如果沒有名稱，則用戶需要手動點擊 "連線" 按鈕
-            // 為了確保刷新後能自動嘗試連接 (如果 Socket.IO 客戶端預設行為如此)
-            // 並且如果已有名字，能進入大廳，我們在這裡也嘗試連接一次。
-            // 但 socket.io client 預設就會在實例化後嘗試連接，除非 autoConnect: false
-            // 現在我們用了 autoConnect: false, 所以連接必須由 connectButton 觸發，
-            // 或在載入名稱後，如果名稱有效，可以主動調用 socket.connect()。
 
             if (currentPlayerName && currentPlayerName.trim()) {
                 addToLog(`偵測到已儲存名稱: ${currentPlayerName}。嘗試自動連接...`);
@@ -518,11 +707,17 @@
             } else {
                 addToLog("未找到已儲存的玩家名稱，請手動設定並連接。");
             }
-        });
-        
-        document.getElementById('texas-holdem-options').style.display = 'block'; 
-        gameTypeSelect.addEventListener('change', function() {
-            document.getElementById('texas-holdem-options').style.display = this.value === 'texas_holdem' ? 'block' : 'none';
+            
+            // 切換遊戲選項顯示
+            gameTypeSelect.addEventListener('change', function() {
+                if (this.value === 'texas_holdem') {
+                    texasHoldemOptions.classList.remove('hidden');
+                    blackJackOptions.classList.add('hidden');
+                } else if (this.value === 'black_jack') {
+                    texasHoldemOptions.classList.add('hidden');
+                    blackJackOptions.classList.remove('hidden');
+                }
+            });
         });
 
     </script>
