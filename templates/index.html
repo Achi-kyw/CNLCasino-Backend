@@ -133,6 +133,7 @@
         </div>
     </div>
 
+    <script src="/static/main.js"></script>
     <script>
         const socket = io('http://' + document.domain + ':' + location.port, {
             autoConnect: false // 初始不自動連接，由按鈕或邏輯觸發
@@ -141,7 +142,7 @@
         let currentPlayerName = '';
         let currentRoomId = null;
         let currentGameType = null;
-        let currentGameStateForClient = {}; 
+        let currentGameStateForClient = {};
 
         // UI 元素
         const connectionSetupDiv = document.getElementById('connection-setup');
@@ -301,6 +302,61 @@
                 } else {
                     myHandDisplay.textContent = '---';
                 }
+                
+                // 德州撲克特定的按鈕顯示/隱藏邏輯
+                const texasButtons = texasHoldemActions.querySelectorAll('button');
+                texasButtons.forEach(btn => btn.disabled = true);
+                
+                const isMyTurn = gameState.current_turn_sid === mySid;
+                if (isMyTurn && gameState.is_game_in_progress) {
+                    actionAmountInput.disabled = false;
+                    
+                    // 根據遊戲狀態啟用適當的按鈕
+                    const availableActions = gameState.available_actions || [];
+                    texasButtons.forEach(btn => {
+                        const action = btn.getAttribute('data-action');
+                        if (availableActions.includes(action)) {
+                            btn.disabled = false;
+                        }
+                    });
+                    
+                    // 如果沒有可用的動作指示，則根據遊戲階段啟用通用的按鈕
+                    if (availableActions.length === 0) {
+                        if (gameState.game_phase === 'pre-flop' || 
+                            gameState.game_phase === 'flop' || 
+                            gameState.game_phase === 'turn' || 
+                            gameState.game_phase === 'river') {
+                            
+                            const currentBetToMatch = gameState.current_street_bet_to_match || 0;
+                            const myBetInStreet = me?.bet_in_current_street || 0;
+                            
+                            // 棄牌按鈕總是可用的
+                            texasButtons.forEach(btn => {
+                                if (btn.getAttribute('data-action') === 'fold') 
+                                    btn.disabled = false;
+                            });
+                            
+                            // 如果沒有需要跟注的金額，可以過牌或下注
+                            if (currentBetToMatch <= myBetInStreet) {
+                                texasButtons.forEach(btn => {
+                                    if (btn.getAttribute('data-action') === 'check' || 
+                                        btn.getAttribute('data-action') === 'bet')
+                                        btn.disabled = false;
+                                });
+                            } else {
+                                // 否則可以跟注或加注
+                                texasButtons.forEach(btn => {
+                                    if (btn.getAttribute('data-action') === 'call' || 
+                                        btn.getAttribute('data-action') === 'raise')
+                                        btn.disabled = false;
+                                });
+                            }
+                        }
+                    }
+                } else {
+                    actionAmountInput.disabled = true;
+                }
+                
             } else if (currentGameType === 'black_jack') {
                 texasHoldemState.classList.add('hidden');
                 blackJackState.classList.remove('hidden');
@@ -662,39 +718,6 @@
                 startGameButton.disabled = true; 
             }
         });
-        
-        gameActionsPanel.addEventListener('click', (event) => {
-            if (event.target.tagName === 'BUTTON' && event.target.dataset.action) {
-                const action = event.target.dataset.action;
-                let payload = {};
-                
-                if (['bet', 'raise'].includes(action)) { 
-                    const amount = parseInt(actionAmountInput.value);
-                    if (isNaN(amount) || amount <= 0) { 
-                        alert('請輸入有效的金額!');
-                        return;
-                    }
-                    payload.amount = amount;
-                }
-                
-                // 21點特殊動作
-                if (action === 'insurance') {
-                    const amount = parseInt(actionAmountInput.value);
-                    if (isNaN(amount) || amount <= 0) { 
-                        alert('請輸入有效的保險金額!');
-                        return;
-                    }
-                    payload.amount = amount;
-                }
-                
-                addToLog(`發送操作: ${action} ${payload.amount !== undefined ? '金額: ' + payload.amount : ''}`);
-                socket.emit('game_action', {
-                    room_id: currentRoomId,
-                    action_type: action,
-                    payload: payload
-                });
-            }
-        });
 
         // --- 初始化 ---
         window.addEventListener('DOMContentLoaded', (event) => {
@@ -718,6 +741,14 @@
                     blackJackOptions.classList.remove('hidden');
                 }
             });
+            
+            // 初始化遊戲操作按鈕
+            if (typeof initializeGameActionListeners === 'function') {
+                initializeGameActionListeners();
+                console.log('遊戲操作按鈕已初始化');
+            } else {
+                console.error('未找到initializeGameActionListeners函數，無法初始化遊戲操作按鈕');
+            }
         });
 
     </script>

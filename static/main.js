@@ -4,6 +4,7 @@ function sendPlayerAction(actionType, payload = {}) {
         console.error("No room joined!");
         return;
     }
+    console.log(`發送遊戲操作: ${actionType}，payload:`, payload);
     socket.emit('game_action', {
         room_id: currentRoomId,
         action_type: actionType,
@@ -15,8 +16,9 @@ function sendPlayerAction(actionType, payload = {}) {
 function pokerAction(action, amount = null) {
     let payload = {};
     if (['bet', 'raise'].includes(action) && amount !== null) {
-        payload.amount = amount;
+        payload.amount = parseInt(amount);
     }
+    console.log(`德州撲克操作: ${action}，金額: ${amount}`);
     sendPlayerAction(action, payload);
 }
 
@@ -24,8 +26,9 @@ function pokerAction(action, amount = null) {
 function blackjackAction(action, amount = null) {
     let payload = {};
     if (['bet', 'insurance'].includes(action) && amount !== null) {
-        payload.amount = amount;
+        payload.amount = parseInt(amount);
     }
+    console.log(`21點操作: ${action}，金額: ${amount}`);
     sendPlayerAction(action, payload);
 }
 
@@ -126,3 +129,48 @@ function updateBlackjackUI(gameState) {
 //         updateBlackjackUI(gameState);
 //     }
 // });
+
+// 初始化遊戲操作事件監聽器
+function initializeGameActionListeners() {
+    const texasHoldemActions = document.getElementById('texas-holdem-actions');
+    const blackJackActions = document.getElementById('black-jack-actions');
+    const actionAmountInput = document.getElementById('actionAmount');
+    
+    if (texasHoldemActions) {
+        texasHoldemActions.querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('click', (event) => {
+                const action = event.target.getAttribute('data-action');
+                let amount = null;
+                
+                if (['bet', 'raise'].includes(action)) {
+                    amount = parseInt(actionAmountInput.value);
+                    if (isNaN(amount) || amount <= 0) {
+                        alert('請輸入有效的金額!');
+                        return;
+                    }
+                }
+                
+                pokerAction(action, amount);
+            });
+        });
+    }
+    
+    if (blackJackActions) {
+        blackJackActions.querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('click', (event) => {
+                const action = event.target.getAttribute('data-action');
+                let amount = null;
+                
+                if (['bet', 'insurance'].includes(action)) {
+                    amount = parseInt(actionAmountInput.value);
+                    if (isNaN(amount) || amount <= 0) {
+                        alert('請輸入有效的金額!');
+                        return;
+                    }
+                }
+                
+                blackjackAction(action, amount);
+            });
+        });
+    }
+}
