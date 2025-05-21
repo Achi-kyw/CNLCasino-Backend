@@ -1,5 +1,6 @@
 # games/texas_holdem/logic.py
 import random
+import eventlet
 from games.base_game import BaseGame # 假設 BaseGame 在 games 目錄下
 
 # 假設 evaluate_hand 和相關常數已定義或從您的撲克評估模組導入
@@ -10,7 +11,7 @@ from .utils import *
 class TexasHoldemGame(BaseGame):
     def __init__(self, room_id, players_sids, socketio_instance, options=None):
         super().__init__(room_id, players_sids, socketio_instance, options)
-        # --- 遊戲狀態初始化 ---
+        # --- 遊戲狀態初始化 (加入計時器相關) ---
         self.game_state['deck'] = []
         self.game_state['community_cards'] = []
         self.game_state['pot'] = 0
@@ -24,15 +25,16 @@ class TexasHoldemGame(BaseGame):
         self.game_state['last_raiser_sid'] = None 
         self.game_state['round_active_players_sids_in_order'] = [] 
         self.game_state['player_who_opened_betting_this_street'] = None
+        
+        self.player_action_timers = {} # sid: eventlet_greenthread_object
+        self.player_timer_instance_ids = {} # sid: integer_instance_id
+        self.ACTION_TIMEOUT_SECONDS = 10 
 
-        # 初始化玩家數據 (self.players 由 BaseGame 初始化為 {})
-        # 如果 __init__ 時傳入了 players_sids (例如創建房間者)，他們會先以預設名稱加入
-        # 然後 app.py 中的 handle_create_room 會再次調用 add_player 來更新名稱
         temp_initial_players = {}
         if players_sids:
             for sid_init in players_sids:
                 temp_initial_players[sid_init] = {
-                    'name': f"玩家_{sid_init[:4]}", # 預設名稱
+                    'name': f"玩家_{sid_init[:4]}", 
                     'chips': self.options.get('buy_in', 1000),
                     'hand': [], 'current_bet': 0, 
                     'bet_in_current_street': 0, 
@@ -40,76 +42,148 @@ class TexasHoldemGame(BaseGame):
                     'has_acted_this_street': False, 
                     'is_all_in': False,
                 }
-        self.players = temp_initial_players # 設置初始玩家數據
+        self.players = temp_initial_players 
         print(f"[德州撲克房間 {self.room_id}] 遊戲實例已創建。初始玩家: {list(self.players.keys())}, 選項: {self.options}")
+
+    # --- 計時器相關方法 ---
+    def _auto_fold_player(self, player_sid_to_fold, expected_instance_id):
+        """當玩家行動超時，此方法被調用以自動棄牌。"""
+        print(f"[德州撲克房間 {self.room_id}] _auto_fold_player CALLED for {player_sid_to_fold} with expected_instance_id {expected_instance_id}.")
+        current_instance_id_for_player = self.player_timer_instance_ids.get(player_sid_to_fold)
+        print(f"    Actual current instance_id for {player_sid_to_fold} is {current_instance_id_for_player}. Current turn: {self.game_state.get('current_turn_sid')}")
+
+        if current_instance_id_for_player != expected_instance_id:
+            print(f"[德州撲克房間 {self.room_id}] Stale timer (ID {expected_instance_id} vs current {current_instance_id_for_player}) for {player_sid_to_fold} fired. Ignoring.")
+            return
+
+        if self.is_game_in_progress and \
+           self.game_state.get('current_turn_sid') == player_sid_to_fold and \
+           player_sid_to_fold in self.players and \
+           self.players[player_sid_to_fold].get('is_active_in_round'):
+            
+            player_name = self.players[player_sid_to_fold]['name']
+            print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} ({player_sid_to_fold}) 超時 (timer_id {expected_instance_id})，執行自動棄牌。")
+            
+            self.players[player_sid_to_fold]['is_active_in_round'] = False
+            self.players[player_sid_to_fold]['has_acted_this_street'] = True 
+
+            if player_sid_to_fold in self.player_action_timers:
+                print(f"[德州撲克房間 {self.room_id}] 從 _auto_fold_player (超時執行) 中移除 {player_sid_to_fold} 的計時器 greenthread 引用。")
+                del self.player_action_timers[player_sid_to_fold]
+
+            timeout_message = f"玩家 {player_name} 超時，自動棄牌。"
+            
+            active_players_left = self._get_active_players_in_round_now()
+            if len(active_players_left) == 1:
+                winner_sid = active_players_left[0]
+                self._award_pot_to_winner(winner_sid, reason=f"因 {player_name} 超時棄牌而獲勝。")
+            elif len(active_players_left) < 1:
+                print(f"[德州撲克房間 {self.room_id}] 在 {player_name} 超時棄牌後沒有剩餘活躍玩家。結束牌局。")
+                self.game_state['pot'] = 0
+                self.end_game({'message': "牌局因所有剩餘玩家棄牌/超時而結束。", 'pot': 0})
+            else:
+                self._advance_to_next_player_or_phase(action_message_for_broadcast=timeout_message)
+        else:
+            print(f"[德州撲克房間 {self.room_id}] 玩家 {player_sid_to_fold} (timer_id {expected_instance_id}) 超時回調，但條件不滿足（可能已行動/非其回合/遊戲結束）。")
+            if player_sid_to_fold in self.player_action_timers:
+                 print(f"[德州撲克房間 {self.room_id}] 條件不滿足的超時回調，檢查是否需要清理 player_action_timers 中的 {player_sid_to_fold}。")
+                 if current_instance_id_for_player == expected_instance_id and player_sid_to_fold in self.player_action_timers:
+                     del self.player_action_timers[player_sid_to_fold]
+
+
+    def _start_player_action_timer(self, player_sid):
+        print(f"[德州撲克房間 {self.room_id}] _start_player_action_timer CALLED for {player_sid}.")
+        self._cancel_player_action_timer(player_sid) 
+
+        if player_sid in self.players and \
+           self.players[player_sid].get('is_active_in_round') and \
+           not self.players[player_sid].get('is_all_in', False) and \
+           self.is_game_in_progress: 
+            
+            player_name = self.players[player_sid]['name']
+            current_instance_id = self.player_timer_instance_ids.get(player_sid, 0) + 1
+            self.player_timer_instance_ids[player_sid] = current_instance_id
+            
+            print(f"[德州撲克房間 {self.room_id}] 為玩家 {player_name} ({player_sid}) 啟動計時器 (ID: {current_instance_id})，時長 {self.ACTION_TIMEOUT_SECONDS} 秒。")
+            
+            timer_thread = eventlet.spawn_after(
+                self.ACTION_TIMEOUT_SECONDS,
+                lambda s=player_sid, inst_id=current_instance_id: self._auto_fold_player(s, inst_id)
+            )
+            self.player_action_timers[player_sid] = timer_thread 
+            print(f"[德州撲克房間 {self.room_id}] 計時器 greenthread 已為 {player_sid} (ID: {current_instance_id}) 添加。當前計時器字典: {list(self.player_action_timers.keys())}")
+        else:
+            print(f"[德州撲克房間 {self.room_id}] 未為玩家 {player_sid} 啟動計時器 (原因：非活躍 / 已All-in / 遊戲未進行 / 玩家不存在)。")
+
+    def _cancel_player_action_timer(self, player_sid):
+        print(f"[德州撲克房間 {self.room_id}] _cancel_player_action_timer CALLED for {player_sid}. 當前計時器 greenthreads: {list(self.player_action_timers.keys())}")
+        timer_to_cancel = self.player_action_timers.pop(player_sid, None) 
+        if timer_to_cancel:
+            print(f"[德州撲克房間 {self.room_id}] 從字典中 Pop 計時器 greenthread for {player_sid}: {timer_to_cancel}")
+            try:
+                timer_to_cancel.kill() 
+                print(f"[德州撲克房間 {self.room_id}] 成功 Kill 玩家 {player_sid} 的計時器線程。")
+            except Exception as e:
+                print(f"[德州撲克房間 {self.room_id}] Kill 玩家 {player_sid} 計時器時發生錯誤: {e}")
+        else:
+            print(f"[德州撲克房間 {self.room_id}] 嘗試取消玩家 {player_sid} 的計時器，但在字典中未找到 greenthread。")
+        print(f"[德州撲克房間 {self.room_id}] 取消操作後，計時器 greenthreads 字典: {list(self.player_action_timers.keys())}")
+
+
+    def _cleanup_all_timers(self):
+        print(f"[德州撲克房間 {self.room_id}] _cleanup_all_timers CALLED。當前計時器 greenthreads 字典內容: {list(self.player_action_timers.keys())}")
+        for sid_to_clean in list(self.player_action_timers.keys()): 
+            print(f"[德州撲克房間 {self.room_id}] _cleanup_all_timers: 正在嘗試取消玩家 {sid_to_clean} 的計時器。")
+            self._cancel_player_action_timer(sid_to_clean)
+        print(f"[德州撲克房間 {self.room_id}] _cleanup_all_timers 完成。最終計時器 greenthreads 字典: {list(self.player_action_timers.keys())}")
+    # --- 結束計時器相關方法 ---
 
     def get_game_type(self):
         return "texas_holdem"
 
     def add_player(self, player_sid, player_info):
-        """添加玩家到遊戲中，或更新已存在玩家的資訊（例如名稱）。"""
         player_name_from_info = player_info.get('name')
-        # 如果提供的名稱為空或僅包含空白，則使用預設名稱格式
         player_name_to_set = player_name_from_info if player_name_from_info and player_name_from_info.strip() else f"玩家_{player_sid[:4]}"
-
         if player_sid not in self.players:
             self.players[player_sid] = {
-                'name': player_name_to_set,
-                'chips': self.options.get('buy_in', 1000),
-                'hand': [],
-                'current_bet': 0,
-                'bet_in_current_street': 0,
-                'is_active_in_round': False, # 新玩家預設不參與正在進行的牌局
-                'has_acted_this_street': False,
-                'is_all_in': False,
+                'name': player_name_to_set, 'chips': self.options.get('buy_in', 1000),
+                'hand': [], 'current_bet': 0, 'bet_in_current_street': 0, 
+                'is_active_in_round': False, 'has_acted_this_street': False, 'is_all_in': False,
             }
             print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name_to_set} ({player_sid}) 新加入。")
             self.broadcast_state(message=f"玩家 {player_name_to_set} 加入了牌桌。")
             return True
         else:
-            # 玩家已存在 (例如創建房間者在 __init__ 中被加入，然後 app.py 再調用 add_player 更新名稱)
             if self.players[player_sid].get('name') != player_name_to_set:
                 old_name = self.players[player_sid].get('name')
                 self.players[player_sid]['name'] = player_name_to_set
                 print(f"[德州撲克房間 {self.room_id}] 玩家 {old_name} ({player_sid}) 更新名稱為 {player_name_to_set}。")
             else:
                 print(f"[德州撲克房間 {self.room_id}] 玩家 {self.players[player_sid]['name']} ({player_sid}) 已在房間中。")
-            
-            # 無論是更新名稱還是僅確認已存在，都廣播一次狀態，確保該玩家能看到最新遊戲畫面
             self.broadcast_state(message=f"玩家 {self.players[player_sid]['name']} 已在牌桌。")
-            return True # 即使是更新資訊，也視為成功操作
+            return True
 
-    # ... (start_game, _post_blind, handle_action, _reset_acted_status_for_others 等方法保持不變) ...
     def _post_blind(self, player_sid, blind_amount, is_small_blind=False):
         player = self.players[player_sid]
         actual_blind_posted = min(player['chips'], blind_amount)
-        
         player['chips'] -= actual_blind_posted
         player['current_bet'] += actual_blind_posted
         player['bet_in_current_street'] += actual_blind_posted
         self.game_state['pot'] += actual_blind_posted
-        
-        if player['chips'] == 0:
-            player['is_all_in'] = True
-            print(f"[德州撲克房間 {self.room_id}] 玩家 {player['name']} 下盲注 {actual_blind_posted} 並 All-in。")
-        else:
-            print(f"[德州撲克房間 {self.room_id}] 玩家 {player['name']} 下盲注 {actual_blind_posted}。")
-        
+        if player['chips'] == 0: player['is_all_in'] = True
+        print(f"[德州撲克房間 {self.room_id}] 玩家 {player['name']} 下盲注 {actual_blind_posted}{'並 All-in' if player['is_all_in'] else ''}。")
         if not is_small_blind: 
             self.game_state['current_street_bet_to_match'] = actual_blind_posted 
             if not (len(self.game_state.get('round_active_players_sids_in_order', [])) == 2 and is_small_blind):
                  self.game_state['last_raiser_sid'] = player_sid 
                  self.game_state['player_who_opened_betting_this_street'] = player_sid
 
-
     def start_game(self, triggering_player_sid=None):
         if self.is_game_in_progress:
             if triggering_player_sid: self.send_error_to_player(triggering_player_sid, "遊戲已在進行中。")
             return False
-
         eligible_player_sids = [sid for sid, data in self.players.items() if data.get('chips', 0) > 0]
         num_eligible_players = len(eligible_player_sids)
-
         if num_eligible_players < self.options.get('min_players', 2):
             msg = f"玩家不足。至少需要 {self.options.get('min_players', 2)} 位有籌碼的玩家才能開始。"
             if triggering_player_sid: self.send_error_to_player(triggering_player_sid, msg)
@@ -118,6 +192,7 @@ class TexasHoldemGame(BaseGame):
 
         print(f"[德州撲克房間 {self.room_id}] 準備開始新牌局。符合資格的玩家 ({num_eligible_players}): {eligible_player_sids}")
         self.is_game_in_progress = True
+        self._cleanup_all_timers() 
         self.game_state['game_phase'] = 'pre-flop'
         self.game_state['deck'] = shuffle_deck(create_deck())
         self.game_state['community_cards'] = []
@@ -126,7 +201,6 @@ class TexasHoldemGame(BaseGame):
         self.game_state['min_next_raise_increment'] = self.game_state['big_blind']
         self.game_state['last_raiser_sid'] = None
         self.game_state['player_who_opened_betting_this_street'] = None
-
 
         for sid in self.players:
             if sid in eligible_player_sids:
@@ -146,17 +220,15 @@ class TexasHoldemGame(BaseGame):
 
         sb_sid, bb_sid, utg_sid = None, None, None
         ordered_sids_from_dealer_plus_1 = [eligible_player_sids[(self.game_state['dealer_button_idx'] + 1 + i) % num_eligible_players] for i in range(num_eligible_players)]
-        
         current_action_order_for_preflop = []
-
-        if num_eligible_players == 2: # Heads-up
+        if num_eligible_players == 2: 
             sb_sid = dealer_sid 
             bb_sid = ordered_sids_from_dealer_plus_1[0] 
             self._post_blind(sb_sid, self.game_state['small_blind'], is_small_blind=True)
             self._post_blind(bb_sid, self.game_state['big_blind'])
             utg_sid = sb_sid 
             current_action_order_for_preflop = [sb_sid, bb_sid]
-        else: # 3人或以上
+        else: 
             sb_sid = ordered_sids_from_dealer_plus_1[0]
             bb_sid = ordered_sids_from_dealer_plus_1[1]
             self._post_blind(sb_sid, self.game_state['small_blind'], is_small_blind=True)
@@ -175,6 +247,9 @@ class TexasHoldemGame(BaseGame):
             if sid in self.players and self.players[sid]['is_active_in_round']:
                 self.players[sid]['hand'] = deal_cards(self.game_state['deck'], 2)
 
+        if utg_sid:
+            self._start_player_action_timer(utg_sid) 
+
         print(f"[德州撲克房間 {self.room_id}] 新牌局已開始。輪到: {self.players[utg_sid]['name'] if utg_sid else 'N/A'}")
         self.broadcast_state(message=f"新牌局開始！輪到 {self.players[utg_sid]['name'] if utg_sid else 'N/A'} 行動。")
         return True
@@ -190,13 +265,13 @@ class TexasHoldemGame(BaseGame):
         if player_sid not in self.players or not self.players[player_sid].get('is_active_in_round'):
             self.send_error_to_player(player_sid, "您已不在本局遊戲中。")
             return
-        
         player = self.players[player_sid]
         if player.get('is_all_in', False) and action_type != 'check': 
             if not (action_type == 'check' and (self.game_state['current_street_bet_to_match'] - player['bet_in_current_street']) <= 0):
                 self.send_error_to_player(player_sid, "您已 All-in，通常只能等待攤牌。")
                 return 
-
+        
+        self._cancel_player_action_timer(player_sid) 
         action_message = f"玩家 {player['name']}"
         action_processed_successfully = False
 
@@ -312,8 +387,6 @@ class TexasHoldemGame(BaseGame):
 
         if action_processed_successfully:
             self._advance_to_next_player_or_phase(action_message_for_broadcast=action_message)
-        else:
-            pass
 
     def _reset_acted_status_for_others(self, current_player_sid):
         for sid, p_data in self.players.items():
@@ -326,32 +399,26 @@ class TexasHoldemGame(BaseGame):
         if player_sid not in self.players:
             print(f"[德州撲克房間 {self.room_id}] 嘗試移除不存在的玩家 {player_sid}。")
             return False
-
         player_data_copy = dict(self.players[player_sid])
         player_name = player_data_copy.get('name', f"未知玩家({player_sid[:4]})")
         was_active_in_round = player_data_copy.get('is_active_in_round', False)
         was_current_turn = (self.game_state.get('current_turn_sid') == player_sid)
-
         print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} ({player_sid}) 正在被移除。之前狀態: active={was_active_in_round}, turn={was_current_turn}")
-        
+        self._cancel_player_action_timer(player_sid) 
         if self.is_game_in_progress and was_active_in_round:
              self.players[player_sid]['is_active_in_round'] = False 
-
         if player_sid in self.game_state.get('round_active_players_sids_in_order', []):
             try: 
                 self.game_state['round_active_players_sids_in_order'].remove(player_sid)
             except ValueError:
                 print(f"[德州撲克房間 {self.room_id}] 警告: 嘗試從行動順序中移除 {player_sid} 失敗，可能已不在其中。")
-
-        del self.players[player_sid]
-
+        if player_sid in self.players: 
+            del self.players[player_sid]
         if self.is_game_in_progress and was_active_in_round:
             fold_message = f"玩家 {player_name} 已斷線並棄牌。"
             print(f"[德州撲克房間 {self.room_id}] {fold_message}")
-            
             active_players_still_in_round = self._get_active_players_in_round_now()
             print(f"[德州撲克房間 {self.room_id}] 棄牌後，剩餘活躍玩家: {len(active_players_still_in_round)}")
-
             if len(active_players_still_in_round) == 1:
                 winner_sid = active_players_still_in_round[0]
                 self._award_pot_to_winner(winner_sid, reason=f"因 {player_name} 斷線而成為最後的玩家。")
@@ -371,7 +438,6 @@ class TexasHoldemGame(BaseGame):
         else:
             print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} 已離開。遊戲未進行或玩家非活躍。")
             self.broadcast_state(message=f"玩家 {player_name} 離開了牌桌。")
-
         if self.get_player_count() == 0 and not self.is_game_in_progress:
             print(f"[德州撲克房間 {self.room_id}] 房間已空且遊戲未進行。發出 ROOM_EMPTY 信號。")
             return "ROOM_EMPTY"
@@ -386,19 +452,19 @@ class TexasHoldemGame(BaseGame):
             win_amount = self.game_state.get('pot', 0)
             winner_player_data['chips'] += win_amount
             self.game_state['pot'] = 0
-            
             final_reason = f"作為最後的玩家獲勝。{reason}".strip() if "最後的玩家" not in reason else reason
             message = f"玩家 {winner_player_data['name']} 贏得了 {win_amount} 籌碼。{final_reason}"
             print(f"[德州撲克房間 {self.room_id}] {message}")
-            
             results = {
                 'winners': [{'sid': winner_sid, 'name': winner_player_data['name'], 'amount_won': win_amount, 'hand': winner_player_data.get('hand', []), 'reason': final_reason}],
                 'pot': 0, 'community_cards': self.game_state.get('community_cards', [])
             }
+            self._cleanup_all_timers() 
             self.end_game(results) 
-            self.game_state['current_turn_sid'] = None
+            self.game_state['current_turn_sid'] = None 
         else:
             print(f"[德州撲克房間 {self.room_id}] 錯誤：在分配底池時找不到贏家 SID {winner_sid}。")
+            self._cleanup_all_timers() 
             self.game_state['pot'] = 0
             self.end_game({'message': f"牌局結束，但贏家資料不一致。{reason}".strip(), 'pot': 0})
 
@@ -414,28 +480,22 @@ class TexasHoldemGame(BaseGame):
         if not active_players_in_order: 
             print(f"[_is_betting_round_over] 無活躍玩家。回合結束。")
             return True
-
         num_players_who_can_bet = 0
         for sid in active_players_in_order:
             player = self.players[sid]
             if not player.get('is_all_in', False) and player.get('chips', 0) > 0:
                 num_players_who_can_bet += 1
-        
         if num_players_who_can_bet < 2 and len(active_players_in_order) > 1 : 
             print(f"[_is_betting_round_over] 可下注玩家少於2人 ({num_players_who_can_bet})。回合結束。")
             return True
-        
         all_acted_this_street = True
         for sid_check_acted in active_players_in_order:
             player_check_acted = self.players[sid_check_acted]
-            # 如果玩家未 all-in 且未行動，則回合未結束
             if not player_check_acted.get('is_all_in', False) and not player_check_acted.get('has_acted_this_street', False):
                 all_acted_this_street = False
                 print(f"[_is_betting_round_over] 玩家 {player_check_acted['name']} 尚未行動。回合繼續。")
                 break
-        if not all_acted_this_street:
-            return False
-
+        if not all_acted_this_street: return False
         target_bet = self.game_state.get('current_street_bet_to_match', 0)
         bets_are_matched = True
         for sid in active_players_in_order:
@@ -445,28 +505,18 @@ class TexasHoldemGame(BaseGame):
                     bets_are_matched = False
                     print(f"[_is_betting_round_over] 下注不匹配。玩家 {player['name']} 下注 {player.get('bet_in_current_street')} vs 目標 {target_bet}。回合繼續。")
                     break
-        
         if all_acted_this_street and bets_are_matched:
-            # 檢查行動是否回到最後一個加注者，並且他沒有再次加注
-            # 或者，如果沒有人加注 (player_who_opened_betting_this_street is None)，則所有人都 check 了
             if self.game_state.get('player_who_opened_betting_this_street') is None:
                 print(f"[_is_betting_round_over] 所有人都已行動且都過牌。回合結束。")
                 return True
-            
-            # 如果有下注/加注，需要更複雜的邏輯來判斷行動是否 "關閉"
-            # 簡化：如果所有人都行動了，且下注都匹配了，就認為結束
-            # 這在BB有option時可能不完全正確，但作為基礎是可行的
             print(f"[_is_betting_round_over] 所有人都已行動且下注匹配。回合結束。")
             return True
-            
         return False
-
 
     def _proceed_to_next_street(self):
         current_phase = self.game_state.get('game_phase')
         next_phase = None
         street_message = ""
-
         if current_phase == 'pre-flop':
             next_phase = 'flop'
             self.game_state['community_cards'] = deal_cards(self.game_state['deck'], 3)
@@ -501,250 +551,187 @@ class TexasHoldemGame(BaseGame):
 
         new_street_action_order = []
         first_to_act_sid_new_street = None
-        
-        # 翻牌後，行動從按鈕位左邊第一個活躍玩家開始
-        # 獲取所有仍在牌局中的玩家
         active_sids_for_new_street = self._get_active_players_in_round_now()
         if not active_sids_for_new_street:
             self._handle_showdown_or_win_by_fold(reason_suffix="新街道開始時無活躍玩家。")
             return False
-
-        # 找到按鈕位玩家在 eligible_player_sids (遊戲開始時的順序) 中的索引
-        # eligible_player_sids 應該在某處被儲存，或者我們需要一個固定的座位順序
-        # 為了簡化，我們假設 eligible_player_sids 在 start_game 時已經確定了座位順序
-        # 這裡我們需要一個方法來獲取按鈕位之後的玩家順序，並且只包含 active_sids_for_new_street 中的玩家
-
-        # 簡易邏輯：從按鈕位的下一個開始，找到第一個仍在 active_sids_for_new_street 的玩家
-        # 這需要一個原始的、固定的座位順序。
-        # 假設 self.game_state['round_active_players_sids_in_order'] 在 pre-flop 時已設為座位順序
-        # 或者，我們需要一個 self.game_state['player_seat_order']
-        
-        # 簡化：從 active_sids_for_new_street 中找到按鈕位，然後順時針
-        # 如果按鈕位不在，則從小盲注位置概念開始 (通常是列表第一個)
         
         dealer_sid = self.game_state.get('dealer_sid_for_display')
-        start_search_idx = 0
-        if dealer_sid in active_sids_for_new_street: # 這裡的 active_sids_for_new_street 順序不一定是座位順序
-            # 我們需要一個基於固定座位順序的列表來查找
-            # 假設 self.game_state['round_active_players_sids_in_order'] 在 preflop 時是完整的座位順序
-            # 並且我們只取其中 is_active_in_round 的人
-            
-            # 再次簡化：我們假設 active_sids_for_new_street 是某種順序
-            # 並且我們從這個列表的頭開始找第一個可以行動的
-            # 這不完全正確，但作為推進的基礎
-            
-            # 正確的邏輯：
-            # 1. 獲取一個固定的座位順序列表 (例如，遊戲開始時的 eligible_player_sids)
-            # 2. 找到按鈕位在該固定列表中的索引 dealer_original_idx
-            # 3. 從 (dealer_original_idx + 1) % num_original_seats 開始遍歷固定列表
-            # 4. 找到第一個在 active_sids_for_new_street 中且未 all-in (除非所有人 all-in) 的玩家
-            
-            # 臨時的簡化實現：
-            temp_action_order = []
-            # 找到按鈕位在 active_sids_for_new_street 中的索引 (如果它是一個有序列表)
-            # 假設 active_sids_for_new_street 已經是某種程度上基於按鈕位的順序
-            # 例如，我們可以重新計算一個從按鈕位下家開始的活躍玩家列表
-            
-            # 獲取所有 eligible_player_sids (遊戲開始時的玩家)
-            # 這裡需要一個在遊戲開始時就確定的 eligible_player_sids 列表，代表座位順序
-            # 假設 self.game_state['initial_eligible_player_sids_in_seat_order'] 儲存了這個
-            
-            # 這裡使用一個更簡單（但不完全正確）的邏輯：
-            # 從 active_sids_for_new_street 中找到第一個可以行動的玩家
-            num_can_bet_new_street = 0
-            for sid_check in active_sids_for_new_street:
-                if not self.players[sid_check].get('is_all_in', False) and self.players[sid_check].get('chips', 0) > 0:
-                    num_can_bet_new_street +=1
+        original_order = self.game_state.get('round_active_players_sids_in_order', []) 
+        
+        dealer_idx_in_original_order = -1
+        if dealer_sid and dealer_sid in original_order:
+            try:
+                dealer_idx_in_original_order = original_order.index(dealer_sid)
+            except ValueError:
+                pass 
 
-            for sid_potential_first in active_sids_for_new_street: # 這裡的順序很重要
-                if num_can_bet_new_street > 0 and self.players[sid_potential_first].get('is_all_in', False):
-                    temp_action_order.append(sid_potential_first) # all-in 玩家仍在順序中，但可能被跳過
-                    continue
-                if first_to_act_sid_new_street is None: # 找到第一個可以主動行動的
-                    first_to_act_sid_new_street = sid_potential_first
-                temp_action_order.append(sid_potential_first)
-            
-            # 重新排序 temp_action_order，使得 first_to_act_sid_new_street 在最前面
-            if first_to_act_sid_new_street and first_to_act_sid_new_street in temp_action_order:
-                start_idx_new = temp_action_order.index(first_to_act_sid_new_street)
-                new_street_action_order = temp_action_order[start_idx_new:] + temp_action_order[:start_idx_new]
-            else: # 如果所有人都 all-in，順序無所謂
-                new_street_action_order = temp_action_order
+        num_can_bet_new_street = 0
+        for sid_check in active_sids_for_new_street:
+            if sid_check in self.players and not self.players[sid_check].get('is_all_in', False) and self.players[sid_check].get('chips', 0) > 0:
+                num_can_bet_new_street +=1
+        
+        new_street_action_order_temp = []
+        if dealer_idx_in_original_order != -1 and original_order: # 確保 original_order 不是空的
+            for i in range(1, len(original_order) + 1):
+                player_to_check_sid = original_order[(dealer_idx_in_original_order + i) % len(original_order)]
+                if player_to_check_sid in active_sids_for_new_street:
+                    new_street_action_order_temp.append(player_to_check_sid)
+        else: 
+            # 如果找不到按鈕位或原始順序，則按 active_sids_for_new_street 的現有順序 (可能需要改進)
+            # 這裡的 active_sids_for_new_street 順序可能不是正確的座位順序
+            # 更好的做法是始終依賴一個固定的座位順序來決定翻牌後的行動
+            print(f"[德州撲克房間 {self.room_id}] 警告: 未找到按鈕位在原始順序中，或原始順序為空。新街道行動順序可能不準確。")
+            new_street_action_order_temp = list(active_sids_for_new_street)
 
 
-        if not first_to_act_sid_new_street and new_street_action_order: # 如果所有人都 all-in
-            first_to_act_sid_new_street = new_street_action_order[0] # 隨便選一個，他們也不能行動
-
-
+        for sid_potential_first in new_street_action_order_temp:
+            if num_can_bet_new_street > 0 and self.players[sid_potential_first].get('is_all_in', False):
+                continue 
+            first_to_act_sid_new_street = sid_potential_first
+            break
+        
+        if not first_to_act_sid_new_street and new_street_action_order_temp: 
+            first_to_act_sid_new_street = new_street_action_order_temp[0] 
+        
         self.game_state['current_turn_sid'] = first_to_act_sid_new_street
-        self.game_state['round_active_players_sids_in_order'] = new_street_action_order
+        self.game_state['round_active_players_sids_in_order'] = new_street_action_order_temp 
         
         for sid_reset_street in self.players: 
             if self.players[sid_reset_street].get('is_active_in_round'):
                 self.players[sid_reset_street]['bet_in_current_street'] = 0
                 self.players[sid_reset_street]['has_acted_this_street'] = False
         
-        print(f"[德州撲克房間 {self.room_id}] 新街道 {next_phase} 開始。輪到: {self.players[first_to_act_sid_new_street]['name'] if first_to_act_sid_new_street else 'N/A'}")
+        if first_to_act_sid_new_street:
+            self._start_player_action_timer(first_to_act_sid_new_street) 
+        
+        print(f"[德州撲克房間 {self.room_id}] 新街道 {next_phase} 開始。輪到: {self.players[first_to_act_sid_new_street]['name'] if first_to_act_sid_new_street and first_to_act_sid_new_street in self.players else 'N/A'}")
         return True 
-
 
     def _auto_deal_remaining_cards_and_showdown(self, reason=""):
         print(f"[德州撲克房間 {self.room_id}] 所有可行動玩家已 All-in。自動發牌並攤牌。{reason}")
         current_phase = self.game_state.get('game_phase')
-        
         cards_dealt_message = "自動發完剩餘公共牌: "
         original_community_len = len(self.game_state['community_cards'])
-
         if current_phase == 'pre-flop':
-            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 3)) # Flop
-            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1)) # Turn
-            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1)) # River
+            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 3)) 
+            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1)) 
+            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1)) 
         elif current_phase == 'flop':
-            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1)) # Turn
-            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1)) # River
+            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1)) 
+            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1)) 
         elif current_phase == 'turn':
-            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1)) # River
-        
+            self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1)) 
         newly_dealt_cards = self.game_state['community_cards'][original_community_len:]
         if newly_dealt_cards:
             cards_dealt_message += " ".join([f"{c['rank']}{c['suit']}" for c in newly_dealt_cards])
         else:
             cards_dealt_message = "無需再發公共牌。"
-        
         print(f"[德州撲克房間 {self.room_id}] {cards_dealt_message}")
-        
         self.game_state['game_phase'] = 'showdown'
-        # 廣播一次發完牌後的狀態，然後再處理攤牌結果
         self.broadcast_state(message=f"{cards_dealt_message} 準備攤牌。")
+        self._cleanup_all_timers() 
         self._handle_showdown_or_win_by_fold(reason_suffix=f"所有玩家 All-in 後自動攤牌。{reason}")
 
-
     def _advance_to_next_player_or_phase(self, action_message_for_broadcast=None):
-        print(f"[德州撲克房間 {self.room_id}] 正在推進玩家或階段... 附帶消息: {action_message_for_broadcast}")
+        print(f"[德州撲克房間 {self.room_id}] _advance_to_next_player_or_phase CALLED. 附帶消息: {action_message_for_broadcast}")
         final_broadcast_message = action_message_for_broadcast or ""
 
         active_players_in_current_betting_order = self._get_active_players_in_order()
         
         if len(active_players_in_current_betting_order) <= 1 and self.is_game_in_progress:
-            # 如果只剩一個或零個玩家，應該由 _handle_showdown_or_win_by_fold 處理
             print(f"[德州撲克房間 {self.room_id}] 只剩 {len(active_players_in_current_betting_order)} 位活躍玩家，進入攤牌/獲勝邏輯。")
             self._handle_showdown_or_win_by_fold(reason_suffix="只剩一位或零位活躍玩家。")
-            # 廣播最後的動作消息 (如果有的話，並且遊戲剛結束)
-            if final_broadcast_message and not self.is_game_in_progress:
+            if final_broadcast_message and not self.is_game_in_progress: 
                 self.broadcast_state(message=final_broadcast_message.strip())
             return 
 
-        # 檢查是否所有剩餘的活躍玩家都已經 All-in (且至少有兩人)
         num_active_not_all_in = 0
         for sid_check_all_in in active_players_in_current_betting_order:
             if not self.players[sid_check_all_in].get('is_all_in', False) and self.players[sid_check_all_in].get('chips',0) > 0:
                 num_active_not_all_in +=1
         
-        if num_active_not_all_in == 0 and len(active_players_in_current_betting_order) > 1:
+        if num_active_not_all_in == 0 and len(active_players_in_current_betting_order) > 1: 
              if self.game_state.get('game_phase') != 'showdown': 
                 self._auto_deal_remaining_cards_and_showdown(reason="所有剩餘玩家均已 All-in。")
                 return 
 
-
         if self._is_betting_round_over():
-            print(f"[德州撲克房間 {self.room_id}] 當前下注回合結束。")
+            print(f"[德州撲克房間 {self.room_id}] 當前下注回合結束。準備清理計時器並進入下一街道。")
+            self._cleanup_all_timers() 
+            
             proceeded_to_new_street = self._proceed_to_next_street() 
             if not proceeded_to_new_street and not self.is_game_in_progress: 
                 if final_broadcast_message: self.broadcast_state(message=final_broadcast_message.strip())
                 return
+
             if self.is_game_in_progress: 
-                new_turn_sid = self.game_state.get('current_turn_sid')
-                if new_turn_sid and new_turn_sid in self.players:
-                    final_broadcast_message += f" 輪到玩家 {self.players[new_turn_sid]['name']} 行動。"
-                elif not new_turn_sid and self.game_state.get('game_phase') != 'showdown': # 如果沒有下個行動者但還沒攤牌 (例如都 all-in)
-                    # 這種情況應該由 _auto_deal_remaining_cards_and_showdown 處理
+                new_turn_sid_after_street = self.game_state.get('current_turn_sid')
+                current_message = final_broadcast_message
+                if new_turn_sid_after_street and new_turn_sid_after_street in self.players:
+                    current_message += f" 輪到玩家 {self.players[new_turn_sid_after_street]['name']} 行動。"
+                elif not new_turn_sid_after_street and self.game_state.get('game_phase') != 'showdown': 
                     print(f"[德州撲克房間 {self.room_id}] 進入新街道但未找到行動者，可能所有人都已 All-in。")
                     self._auto_deal_remaining_cards_and_showdown(reason="進入新街道後無人可行動。")
-                    return
-                else: # 已進入攤牌或遊戲結束
-                    pass # end_game 會處理廣播
+                    return 
                 
-                # 只有在遊戲還在進行且有明確下一輪行動時才廣播
                 if self.is_game_in_progress and self.game_state.get('current_turn_sid'):
-                    self.broadcast_state(message=final_broadcast_message.strip())
+                    self.broadcast_state(message=current_message.strip())
+                elif not self.is_game_in_progress and current_message: 
+                    self.broadcast_state(message=current_message.strip())
         else: 
-            current_acting_player_sid = self.game_state.get('current_turn_sid') # 剛行動完的玩家
+            current_acting_player_sid = self.game_state.get('current_turn_sid') 
             next_player_sid = None
-            
-            # 從當前行動順序中找到下一個可以行動的玩家
-            # 玩家必須：1. is_active_in_round, 2. 未 all-in (除非他是最後一個), 3. has_acted_this_street 為 False
-            # 行動權應該輪轉，直到回到最後一個加注者，並且他選擇了 check/call
-            
-            # 獲取當前行動順序 (這個順序在每條街開始時設定)
             current_betting_order = self.game_state.get('round_active_players_sids_in_order', [])
-            
-            if not current_betting_order: # 不應發生
+            if not current_betting_order: 
                 self._handle_showdown_or_win_by_fold(reason_suffix="行動順序列表為空。")
                 return
-
-            try:
-                # 找到剛行動完的玩家在當前順序中的索引
-                last_acted_player_idx = current_betting_order.index(current_acting_player_sid)
-            except ValueError:
-                print(f"[德州撲克房間 {self.room_id}] 警告：剛行動的玩家 {current_acting_player_sid} 不在當前行動順序中。")
-                # 嘗試從頭開始找
-                last_acted_player_idx = -1 # 表示從頭開始
-
+            last_acted_player_idx = -1
+            if current_acting_player_sid and current_acting_player_sid in current_betting_order:
+                try:
+                    last_acted_player_idx = current_betting_order.index(current_acting_player_sid)
+                except ValueError:
+                    print(f"[德州撲克房間 {self.room_id}] 警告：剛行動的玩家 {current_acting_player_sid} 不在當前行動順序中。")
+            
             found_next = False
-            for i in range(1, len(current_betting_order) + 1): # 最多檢查一整圈
+            for i in range(1, len(current_betting_order) + 1): 
                 next_candidate_idx = (last_acted_player_idx + i) % len(current_betting_order)
                 candidate_sid = current_betting_order[next_candidate_idx]
-
                 if candidate_sid not in self.players or not self.players[candidate_sid].get('is_active_in_round'):
-                    continue # 跳過已棄牌或已離開的玩家
-
-                player_candidate = self.players[candidate_sid]
-                
-                # 如果玩家已 all-in，他不能再主動行動，除非他是最後一個需要 "確認" 的 (這由 _is_betting_round_over 處理)
-                if player_candidate.get('is_all_in', False):
                     continue 
-                
-                # 如果玩家還未在本街道行動，則輪到他
-                if not player_candidate.get('has_acted_this_street', False):
+                player_candidate = self.players[candidate_sid]
+                if player_candidate.get('is_all_in', False): 
+                    continue 
+                if not player_candidate.get('has_acted_this_street', False): 
                     next_player_sid = candidate_sid
                     found_next = True
                     break
-                
-                # 如果玩家已行動，但他是本街道的開局者/最後加注者，且行動又回到他，他有再次行動的權利 (option)
-                # 這裡的邏輯是：如果他是 last_raiser_sid，且 current_street_bet_to_match > 他的 bet_in_current_street (表示有人 re-raise 他之後)
-                # 或者他是 player_who_opened_betting_this_street (例如 BB)，且行動回到他且無人加注
-                # 這個 "option" 的判斷比較複雜，暫時簡化
-                # 簡化：如果所有人都行動過了，_is_betting_round_over 會返回 True
-                
+            
             if found_next and next_player_sid:
                 self.game_state['current_turn_sid'] = next_player_sid
-                final_broadcast_message += f" 輪到玩家 {self.players[next_player_sid]['name']} 行動。"
-                self.broadcast_state(message=final_broadcast_message.strip())
+                self._start_player_action_timer(next_player_sid) 
+                current_message = final_broadcast_message + f" 輪到玩家 {self.players[next_player_sid]['name']} 行動。"
+                self.broadcast_state(message=current_message.strip())
             else:
-                # 如果找不到下一個可以行動的玩家，但 _is_betting_round_over() 返回 False
-                # 這通常表示所有人都已行動，且下注可能已匹配，或者所有人都 all-in
-                print(f"[德州撲克房間 {self.room_id}] 未找到明確的下一個行動者，但回合未結束。重新檢查回合結束條件。")
+                print(f"[德州撲克房間 {self.room_id}] 警告：無法找到下一個行動者，但下注回合被認為未結束。檢查 _is_betting_round_over 邏輯。")
                 if self.is_game_in_progress:
-                    if self._is_betting_round_over(): # 再次檢查，因為狀態可能已更新
-                         self._advance_to_next_player_or_phase(action_message_for_broadcast=final_broadcast_message) # 可能遞迴，小心
+                    if self._is_betting_round_over(): 
+                         self._advance_to_next_player_or_phase(action_message_for_broadcast=final_broadcast_message) 
                     else: 
                          self._auto_deal_remaining_cards_and_showdown(reason="無法確定下一行動者，強制攤牌。")
-
 
     def _handle_showdown_or_win_by_fold(self, reason_suffix=""):
         if not self.is_game_in_progress: 
             print(f"[德州撲克房間 {self.room_id}] 嘗試攤牌，但遊戲已結束。")
             return
-        
         print(f"[德州撲克房間 {self.room_id}] 進入攤牌或單人獲勝處理。 {reason_suffix}")
-        
-        # 確保所有公共牌都已發出 (如果適用)
+        self._cleanup_all_timers() 
         current_phase = self.game_state.get('game_phase')
-        if current_phase != 'showdown': # 如果不是因為正常流程到攤牌，而是中途結束
+        if current_phase != 'showdown': 
             while len(self.game_state['community_cards']) < 5 and current_phase not in ['showdown', None]:
                 if current_phase == 'pre-flop' and len(self.game_state['community_cards']) == 0:
                     self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 3))
-                    current_phase = 'flop' # 更新內部階段，但不影響 game_phase 狀態變數
+                    current_phase = 'flop' 
                     print(f"[德州撲克房間 {self.room_id}] 自動發 Flop: {[(c['rank'], c['suit']) for c in self.game_state['community_cards'][-3:]]}")
                 elif current_phase == 'flop' and len(self.game_state['community_cards']) == 3:
                     self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1))
@@ -754,21 +741,16 @@ class TexasHoldemGame(BaseGame):
                     self.game_state['community_cards'].extend(deal_cards(self.game_state['deck'], 1))
                     current_phase = 'river'
                     print(f"[德州撲克房間 {self.room_id}] 自動發 River: {[(c['rank'], c['suit']) for c in self.game_state['community_cards'][-1:]]}")
-                else: # 已是 river 或牌已發完
-                    break 
-            self.game_state['game_phase'] = 'showdown' # 正式標記為攤牌階段
-
+                else: break 
+            self.game_state['game_phase'] = 'showdown' 
         active_players_final = self._get_active_players_in_round_now()
         if len(active_players_final) == 1:
             self._award_pot_to_winner(active_players_final[0], reason=f"作為最後活躍玩家獲勝。{reason_suffix}")
         elif len(active_players_final) > 1:
             print(f"[德州撲克房間 {self.room_id}] 進行攤牌，有 {len(active_players_final)} 位玩家。")
-            
             winner_evaluations = [] 
             best_eval_value = -1
             best_tie_breaker = []
-
-            # 收集所有參與攤牌玩家的牌力評估
             showdown_participants_evals = []
             for p_sid in active_players_final:
                 player_data = self.players[p_sid]
@@ -776,17 +758,14 @@ class TexasHoldemGame(BaseGame):
                 community = self.game_state.get('community_cards', [])
                 eval_result = evaluate_hand(player_hole_cards, community) 
                 showdown_participants_evals.append({
-                    'sid': p_sid, 
-                    'name': player_data['name'], 
-                    'hole_cards': player_hole_cards, # 玩家的底牌
-                    'best_5_card_hand': eval_result.get('hand_cards', []), # 組成最佳牌型的5張牌
-                    'hand_name': eval_result.get('name', '未知牌型'), # 最佳牌型名稱
-                    'hand_value': eval_result.get('value', -1), # 牌力數值
-                    'tie_breaker_ranks': eval_result.get('tie_breaker_ranks', []) # 用於比牌的等級
+                    'sid': p_sid, 'name': player_data['name'], 
+                    'hole_cards': player_hole_cards, 
+                    'best_5_card_hand': eval_result.get('hand_cards', []), 
+                    'hand_name': eval_result.get('name', '未知牌型'), 
+                    'hand_value': eval_result.get('value', -1), 
+                    'tie_breaker_ranks': eval_result.get('tie_breaker_ranks', []) 
                 })
                 print(f"[德州撲克房間 {self.room_id}] 玩家 {player_data['name']} 底牌: {player_hole_cards}, 公共牌: {community}, 評估: {eval_result['name']}, 牌值: {eval_result['value']}, 最佳5張: {eval_result.get('hand_cards')}, TieBreak: {eval_result.get('tie_breaker_ranks')}")
-
-                # 判斷贏家
                 if not winner_evaluations or eval_result['value'] > best_eval_value:
                     best_eval_value = eval_result['value']
                     best_tie_breaker = eval_result.get('tie_breaker_ranks', [])
@@ -798,58 +777,52 @@ class TexasHoldemGame(BaseGame):
                         winner_evaluations = [{'sid': p_sid, 'eval': eval_result, 'name': player_data['name'], 'hole_cards': player_hole_cards}]
                     elif current_tie_breaker == best_tie_breaker: 
                         winner_evaluations.append({'sid': p_sid, 'eval': eval_result, 'name': player_data['name'], 'hole_cards': player_hole_cards})
-            
             if winner_evaluations:
                 num_winners = len(winner_evaluations)
                 total_pot = self.game_state.get('pot', 0)
                 amount_per_winner = int(total_pot / num_winners) if num_winners > 0 else 0
                 remainder = total_pot % num_winners if num_winners > 0 else 0 
-
                 winners_for_results = []
                 for i, winner_data_entry in enumerate(winner_evaluations):
                     actual_winner_sid = winner_data_entry['sid']
                     winning_hand_name = winner_data_entry['eval']['name']
                     best_5_cards_for_winner = winner_data_entry['eval'].get('hand_cards', [])
-                    
                     win_this_share = amount_per_winner
-                    if i < remainder: 
-                        win_this_share += 1
-                    
+                    if i < remainder: win_this_share += 1
                     if actual_winner_sid in self.players:
                         self.players[actual_winner_sid]['chips'] += win_this_share
-                    
                     winners_for_results.append({
-                        'sid': actual_winner_sid, 
-                        'name': winner_data_entry['name'], 
-                        'amount_won': win_this_share, 
-                        'hole_cards': winner_data_entry['hole_cards'], 
+                        'sid': actual_winner_sid, 'name': winner_data_entry['name'], 
+                        'amount_won': win_this_share, 'hole_cards': winner_data_entry['hole_cards'], 
                         'best_hand_description': winning_hand_name,
-                        'best_5_card_hand': best_5_cards_for_winner, # 加入最佳5張牌
+                        'best_5_card_hand': best_5_cards_for_winner, 
                         'reason': f"在攤牌中以 {winning_hand_name} ({''.join([f'{c["rank"]}{c["suit"]}' for c in best_5_cards_for_winner]) if best_5_cards_for_winner else 'N/A'}) 獲勝。{reason_suffix}"
                     })
-                
                 self.game_state['pot'] = 0 
                 results_payload = {
-                    'winners': winners_for_results, # 包含詳細獲勝資訊的列表
-                    'pot_details_DEBUG': {'total_pot_before_split': total_pot, 'num_winners': num_winners, 'amount_per_winner_base': amount_per_winner, 'remainder_chips': remainder}, # 除錯用
+                    'winners': winners_for_results, 'pot': 0, 
                     'community_cards': self.game_state.get('community_cards', []),
-                    'all_hands_at_showdown': showdown_participants_evals # 所有參與攤牌者的詳細評估
+                    'all_hands_at_showdown': showdown_participants_evals 
                 }
                 self.end_game(results_payload) 
                 self.game_state['current_turn_sid'] = None
-            else: # 理論上不應發生，因為 active_players_final > 1
+            else: 
                  self._award_pot_to_winner(active_players_final[0], reason=f"在攤牌中獲勝 (佔位邏輯 - 無法評估贏家)。{reason_suffix}")
         else:
             print(f"[德州撲克房間 {self.room_id}] 沒有活躍玩家參與攤牌。{reason_suffix}")
             self.game_state['pot'] = 0
             self.end_game({'message': f"牌局因沒有活躍玩家而結束。{reason_suffix}"})
+    
+    def end_game(self, results):
+        print(f"[德州撲克房間 {self.room_id}] 遊戲回合結束。清理計時器。")
+        self._cleanup_all_timers() 
+        super().end_game(results) 
+
 
     def get_state_for_player(self, player_sid):
-        # --- 加入詳細日誌 ---
-        print(f"--- [get_state_for_player] 為玩家 {player_sid} 準備狀態 ---")
-        print(f"    當前 self.players 鍵: {list(self.players.keys())}")
-        print(f"    遊戲進行中: {self.is_game_in_progress}, 遊戲階段: {self.game_state.get('game_phase')}")
-
+        # print(f"--- [get_state_for_player] 為玩家 {player_sid} 準備狀態 ---")
+        # print(f"    當前 self.players 鍵: {list(self.players.keys())}")
+        # print(f"    遊戲進行中: {self.is_game_in_progress}, 遊戲階段: {self.game_state.get('game_phase')}")
         if player_sid not in self.players and \
            (not self.socketio or player_sid not in self.socketio.server.manager.rooms['/'].get(self.room_id, {})):
             if player_sid:
@@ -861,49 +834,29 @@ class TexasHoldemGame(BaseGame):
                 'pot': self.game_state.get('pot', 0), 'current_turn_sid': self.game_state.get('current_turn_sid'),
                 'message': "您已不在遊戲中或無法獲取您的特定狀態。"
             }
-
         public_players_data = []
-        for sid_loop, p_data in self.players.items(): # 使用 sid_loop 避免與外部 player_sid 混淆
-            print(f"    正在處理玩家 sid_loop={sid_loop} 的數據...")
-            # print(f"        原始 p_data: {p_data}") # 避免過多日誌，除非需要
-
-            # 確保即使 name 為 None 或空，也有一個預設值
+        for sid_loop, p_data in self.players.items(): 
             player_name_display = p_data.get('name')
             if not player_name_display or not player_name_display.strip():
                 player_name_display = f"玩家_{sid_loop[:4]}"
-                # print(f"        注意: 玩家 {sid_loop} 名稱無效或為空，使用預設名稱: {player_name_display}")
-
-
             player_view = {
-                'sid': sid_loop, 
-                'name': player_name_display, # 使用處理過的名稱
-                'chips': p_data.get('chips', 0), 
-                'current_bet': p_data.get('current_bet', 0), 
+                'sid': sid_loop, 'name': player_name_display, 
+                'chips': p_data.get('chips', 0), 'current_bet': p_data.get('current_bet', 0), 
                 'bet_in_current_street': p_data.get('bet_in_current_street', 0), 
                 'is_active_in_round': p_data.get('is_active_in_round', False),
                 'is_all_in': p_data.get('is_all_in', False),
                 'has_acted_this_street': p_data.get('has_acted_this_street', False),
                 'hand': [] 
             }
-            
-            # 手牌顯示邏輯
-            # can_see_hand = False # 除錯用
             if sid_loop == player_sid and self.is_game_in_progress:
                 player_view['hand'] = p_data.get('hand', [])
-                # can_see_hand = True
-                # print(f"        顯示手牌給當前玩家 {player_sid} (sid_loop={sid_loop})")
             elif self.game_state.get('game_phase') == 'showdown' and p_data.get('is_active_in_round', False):
                 player_view['hand'] = p_data.get('hand', [])
-                # can_see_hand = True
-                # print(f"        攤牌階段: 顯示玩家 {sid_loop} 的手牌")
-            
-            # print(f"        為 sid_loop={sid_loop} 構建的 player_view (手牌可見={can_see_hand}): {player_view}") # 避免過多日誌
             public_players_data.append(player_view)
-
         state_for_player = {
             'room_id': self.room_id, 'game_type': self.get_game_type(),
             'is_game_in_progress': self.is_game_in_progress,
-            'players': public_players_data, # <--- 這是傳給前端的玩家列表
+            'players': public_players_data, 
             'community_cards': self.game_state.get('community_cards', []),
             'pot': self.game_state.get('pot', 0),
             'current_turn_sid': self.game_state.get('current_turn_sid'),
@@ -913,7 +866,6 @@ class TexasHoldemGame(BaseGame):
             'dealer_sid_for_display': self.game_state.get('dealer_sid_for_display'),
             'round_active_players_sids_in_order_DEBUG': self.game_state.get('round_active_players_sids_in_order', []),
             'options': self.options,
-            'my_sid_debug': player_sid # 方便前端識別這是為誰產生的狀態
+            'my_sid_debug': player_sid 
         }
-        # print(f"--- 為玩家 {player_sid} 產生的最終狀態: {state_for_player} ---") # 避免過多日誌
         return state_for_player
