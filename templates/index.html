@@ -31,9 +31,9 @@
         <div id="connection-setup">
             <h2>連線設定</h2>
             <label for="playerName">你的名字:</label>
-            <input type="text" id="playerName" value=""> <button id="connectButton">連線並進入大廳</button>
-            <p>SID: <span id="mySid">尚未連線</span></p>
-            <p>狀態: <span id="connectionStatus">未連線</span></p>
+            <input type="text" id="playerName" value=""> 
+            <button id="connectButton">連線並進入大廳</button>
+            <p>我的 SID: <span id="mySidDisplay">尚未連線</span></p> <p>狀態: <span id="connectionStatus">未連線</span></p>
         </div>
 
         <div id="lobby" class="hidden">
@@ -44,9 +44,10 @@
                 <label for="gameType">選擇遊戲:</label>
                 <select id="gameType">
                     <option value="texas_holdem">德州撲克</option>
-                    <option value="black_jack">21點</option>
+                    <option value="black_jack">21點 (Black Jack)</option>
                 </select>
                 <div id="texas-holdem-options">
+                    <h4>德州撲克選項</h4>
                     <label for="buyIn">初始籌碼:</label>
                     <input type="number" id="buyIn" value="1000">
                     <label for="smallBlind">小盲注:</label>
@@ -55,12 +56,11 @@
                     <input type="number" id="bigBlind" value="20">
                 </div>
                 <div id="black-jack-options" class="hidden">
-                    <label for="bjBuyIn">初始籌碼:</label>
-                    <input type="number" id="bjBuyIn" value="1000">
-                    <label for="minBet">最小下注:</label>
-                    <input type="number" id="minBet" value="10">
-                    <label for="maxBet">最大下注:</label>
-                    <input type="number" id="maxBet" value="500">
+                    <h4>21點選項</h4>
+                    <label for="bjMinBet">最小下注:</label>
+                    <input type="number" id="bjMinBet" value="10">
+                     <label for="bjMaxBet">最大下注:</label>
+                    <input type="number" id="bjMaxBet" value="100">
                 </div>
                 <button id="createRoomButton">創建房間</button>
             </div>
@@ -70,6 +70,7 @@
                 <div id="roomList">
                     <p>正在獲取房間列表...</p>
                 </div>
+                <button id="refreshLobbyButton">刷新房間列表</button>
             </div>
         </div>
 
@@ -80,24 +81,23 @@
             <button id="startGameButton">開始遊戲</button>
 
             <div class="game-state">
-                <h3>遊戲狀態 (<span id="currentGamePhase">---</span>)</h3>
-                <p>底池: <span id="pot">0</span></p>
-                <div id="texas-holdem-state">
+                <h3 id="gameSpecificStateTitle">遊戲狀態 (<span id="currentGamePhase">---</span>)</h3>
+                <div id="texasHoldemState" class="hidden">
+                    <p>底池: <span id="pot">0</span></p>
                     <p>公共牌: <span id="communityCards">---</span></p>
                     <p>輪到: <span id="currentPlayerTurn">---</span></p>
                     <p>當前需跟注: <span id="currentBetToMatch">0</span></p>
                     <p>最小加注額(增量): <span id="minRaiseIncrementDisplay">0</span></p>
                 </div>
-                <div id="black-jack-state" class="hidden">
-                    <p>莊家牌: <span id="dealerCards">---</span></p>
-                    <p>莊家點數: <span id="dealerPoints">0</span></p>
+                <div id="blackJackState" class="hidden">
+                    <p>莊家手牌: <span id="dealerHand">---</span></p>
+                    <p>您的狀態: <span id="bjPlayerStatus">---</span></p>
                 </div>
             </div>
 
             <div class="player-hand">
                 <h3>我的手牌</h3>
                 <p id="myHandDisplay">---</p>
-                <p id="myPointsDisplay" class="hidden">我的點數: 0</p>
             </div>
 
             <div id="players-display">
@@ -106,23 +106,21 @@
 
             <div class="actions">
                 <h3>我的操作</h3>
-                <div id="game-actions-panel">
+                <div id="texasHoldemActions" class="hidden">
                     <input type="number" id="actionAmount" placeholder="金額" value="0">
-                    <div id="texas-holdem-actions">
-                        <button data-action="fold">棄牌 (Fold)</button>
-                        <button data-action="check">過牌 (Check)</button>
-                        <button data-action="call">跟注 (Call)</button>
-                        <button data-action="bet">下注 (Bet)</button>
-                        <button data-action="raise">加注 (Raise)</button>
-                    </div>
-                    <div id="black-jack-actions" class="hidden">
-                        <button data-action="bet">下注 (Bet)</button>
-                        <button data-action="hit">要牌 (Hit)</button>
-                        <button data-action="stand">停牌 (Stand)</button>
-                        <button data-action="double">加倍 (Double)</button>
-                        <button data-action="insurance">保險 (Insurance)</button>
-                        <button data-action="decline_insurance">拒絕保險</button>
-                    </div>
+                    <button data-action="fold">棄牌 (Fold)</button>
+                    <button data-action="check">過牌 (Check)</button>
+                    <button data-action="call">跟注 (Call)</button>
+                    <button data-action="bet">下注 (Bet)</button>
+                    <button data-action="raise">加注 (Raise)</button>
+                </div>
+                <div id="blackJackActions" class="hidden">
+                    <input type="number" id="bjBetAmount" placeholder="下注金額" value="10">
+                    <button data-action="place_bet">下注 (Place Bet)</button>
+                    <button data-action="hit">要牌 (Hit)</button>
+                    <button data-action="stand">停牌 (Stand)</button>
+                    <button data-action="double_down" disabled>加倍 (Double Down)</button>
+                    <button data-action="split" disabled>分牌 (Split)</button>
                 </div>
             </div>
         </div>
@@ -133,16 +131,15 @@
         </div>
     </div>
 
-    <script src="/static/main.js"></script>
     <script>
-        const socket = io('http://' + document.domain + ':' + location.port, {
-            autoConnect: false // 初始不自動連接，由按鈕或邏輯觸發
+        const socket = io('http://' + document.domain + ':' + (location.port || '4000'), { // 後端改用4000端口
+            autoConnect: false 
         }); 
-        let mySid = null;
+        let myLocalSid = null; // 用於儲存從伺服器獲取的 SID
         let currentPlayerName = '';
         let currentRoomId = null;
         let currentGameType = null;
-        let currentGameStateForClient = {};
+        let currentGameStateForClient = {}; 
 
         // UI 元素
         const connectionSetupDiv = document.getElementById('connection-setup');
@@ -150,100 +147,133 @@
         const gameRoomViewDiv = document.getElementById('game-room-view');
         const connectButton = document.getElementById('connectButton');
         const playerNameInput = document.getElementById('playerName');
-        const mySidDisplay = document.getElementById('mySid');
+        const mySidDisplay = document.getElementById('mySidDisplay'); // 更新 ID
         const connectionStatusDisplay = document.getElementById('connectionStatus');
         const lobbyPlayerNameSpan = document.getElementById('lobbyPlayerName'); 
         const gameRoomPlayerNameSpan = document.getElementById('gameRoomPlayerName'); 
         const createRoomButton = document.getElementById('createRoomButton');
         const gameTypeSelect = document.getElementById('gameType');
-        const texasHoldemOptions = document.getElementById('texas-holdem-options');
-        const blackJackOptions = document.getElementById('black-jack-options');
         const roomListDiv = document.getElementById('roomList');
+        const refreshLobbyButton = document.getElementById('refreshLobbyButton'); // 新增
         const roomTitleH2 = document.getElementById('room-title');
         const leaveRoomButton = document.getElementById('leaveRoomButton');
         const startGameButton = document.getElementById('startGameButton');
-        const currentGamePhaseDisplay = document.getElementById('currentGamePhase');
-        const potDisplay = document.getElementById('pot');
-        const texasHoldemState = document.getElementById('texas-holdem-state');
-        const blackJackState = document.getElementById('black-jack-state');
-        const communityCardsDisplay = document.getElementById('communityCards');
-        const dealerCardsDisplay = document.getElementById('dealerCards');
-        const dealerPointsDisplay = document.getElementById('dealerPoints');
-        const currentPlayerTurnDisplay = document.getElementById('currentPlayerTurn');
-        const currentBetToMatchDisplay = document.getElementById('currentBetToMatch');
-        const minRaiseIncrementDisplay = document.getElementById('minRaiseIncrementDisplay'); 
-        const myHandDisplay = document.getElementById('myHandDisplay');
-        const myPointsDisplay = document.getElementById('myPointsDisplay');
-        const playersDisplayDiv = document.getElementById('players-display');
-        const gameActionsPanel = document.getElementById('game-actions-panel');
-        const texasHoldemActions = document.getElementById('texas-holdem-actions');
-        const blackJackActions = document.getElementById('black-jack-actions');
-        const actionAmountInput = document.getElementById('actionAmount');
+        
+        // 遊戲特定 UI 元素
+        const gameSpecificStateTitle = document.getElementById('gameSpecificStateTitle');
+        const texasHoldemStateDiv = document.getElementById('texasHoldemState');
+        const blackJackStateDiv = document.getElementById('blackJackState');
+        const texasHoldemActionsDiv = document.getElementById('texasHoldemActions');
+        const blackJackActionsDiv = document.getElementById('blackJackActions');
+
+        const currentGamePhaseDisplay = document.getElementById('currentGamePhase'); // 德撲用
+        const potDisplay = document.getElementById('pot'); // 德撲用
+        const communityCardsDisplay = document.getElementById('communityCards'); // 德撲用
+        const currentPlayerTurnDisplay = document.getElementById('currentPlayerTurn'); // 通用，但內容可能不同
+        const currentBetToMatchDisplay = document.getElementById('currentBetToMatch'); // 德撲用
+        const minRaiseIncrementDisplay = document.getElementById('minRaiseIncrementDisplay'); // 德撲用
+        
+        const dealerHandDisplay = document.getElementById('dealerHand'); // 21點用
+        const bjPlayerStatusDisplay = document.getElementById('bjPlayerStatus'); // 21點用
+
+        const myHandDisplay = document.getElementById('myHandDisplay'); // 通用
+        const playersDisplayDiv = document.getElementById('players-display'); // 通用
+        
+        const actionAmountInput = document.getElementById('actionAmount'); // 德撲用
+        const bjBetAmountInput = document.getElementById('bjBetAmount'); // 21點用
+
         const logArea = document.getElementById('log-area');
 
-        // --- localStorage 相關函式 ---
         const PLAYER_NAME_KEY = 'multiGamePlayerName';
 
         function savePlayerNameToStorage(name) {
-            try {
-                localStorage.setItem(PLAYER_NAME_KEY, name);
-            } catch (e) {
-                addToLog('無法儲存玩家名稱到 localStorage。', 'error');
-                console.error("Error saving to localStorage:", e);
-            }
+            try { localStorage.setItem(PLAYER_NAME_KEY, name); } catch (e) { console.error("Error saving to localStorage:", e); }
         }
-
         function loadPlayerNameFromStorage() {
             try {
                 const storedName = localStorage.getItem(PLAYER_NAME_KEY);
                 if (storedName && storedName.trim()) {
                     currentPlayerName = storedName.trim();
-                    playerNameInput.value = currentPlayerName; // 預填輸入框
+                    playerNameInput.value = currentPlayerName; 
                     addToLog(`從 localStorage 載入名稱: ${currentPlayerName}`);
-                    return currentPlayerName;
+                    return true;
                 }
-            } catch (e) {
-                addToLog('無法從 localStorage 讀取玩家名稱。', 'error');
-                console.error("Error loading from localStorage:", e);
-            }
-            return null;
+            } catch (e) { console.error("Error loading from localStorage:", e); }
+            return false;
         }
 
-
-        // --- 日誌函式 ---
         function addToLog(message, type = 'info') {
             const time = new Date().toLocaleTimeString();
             const logEntry = document.createElement('p');
             logEntry.textContent = `[${time}] ${type === 'error' ? 'ERROR: ' : ''}${message}`;
             if (type === 'error') logEntry.style.color = 'red';
             logArea.insertBefore(logEntry, logArea.firstChild); 
-            if (logArea.childElementCount > 50) { 
-                logArea.removeChild(logArea.lastChild);
-            }
+            if (logArea.childElementCount > 50) { logArea.removeChild(logArea.lastChild); }
         }
 
-        // --- UI 更新函式 ---
         function showView(viewName) {
             connectionSetupDiv.classList.add('hidden');
             lobbyDiv.classList.add('hidden');
             gameRoomViewDiv.classList.add('hidden');
-
             if (viewName === 'connection') {
                 connectionSetupDiv.classList.remove('hidden');
-                connectButton.disabled = false; // 確保按鈕可用
+                connectButton.disabled = false; 
                 playerNameInput.disabled = false;
             } else if (viewName === 'lobby') {
                 lobbyDiv.classList.remove('hidden');
                 if(lobbyPlayerNameSpan) lobbyPlayerNameSpan.textContent = currentPlayerName || "訪客";
+                fetchLobbyRooms(); // 進入大廳時獲取房間列表
             } else if (viewName === 'game-room') {
                 gameRoomViewDiv.classList.remove('hidden');
                 if(gameRoomPlayerNameSpan) gameRoomPlayerNameSpan.textContent = currentPlayerName || "訪客";
+                // 根據 currentGameType 顯示對應的遊戲狀態和操作面板
+                updateGameSpecificUI(currentGameType);
             }
         }
         
+        function updateGameSpecificUI(gameType) {
+            texasHoldemStateDiv.classList.add('hidden');
+            blackJackStateDiv.classList.add('hidden');
+            texasHoldemActionsDiv.classList.add('hidden');
+            blackJackActionsDiv.classList.add('hidden');
+
+            if (gameType === 'texas_holdem') {
+                texasHoldemStateDiv.classList.remove('hidden');
+                texasHoldemActionsDiv.classList.remove('hidden');
+                gameSpecificStateTitle.textContent = `德州撲克狀態 (<span id="currentGamePhase">---</span>)`;
+            } else if (gameType === 'black_jack') {
+                blackJackStateDiv.classList.remove('hidden');
+                blackJackActionsDiv.classList.remove('hidden');
+                gameSpecificStateTitle.textContent = `21點狀態 (<span id="bjGamePhase">---</span>)`; // 可以用不同的 ID
+            }
+        }
+
+
+        async function fetchLobbyRooms() {
+            addToLog('正在獲取房間列表 (API)...');
+            try {
+                const response = await fetch('/api/lobby/rooms');
+                if (!response.ok) {
+                    throw new Error(`獲取房間列表失敗: ${response.statusText}`);
+                }
+                const data = await response.json();
+                if (data && data.rooms) {
+                    updateRoomList(data.rooms);
+                    addToLog('房間列表已透過 API 更新。');
+                } else {
+                    updateRoomList({}); // 清空或顯示無房間
+                    addToLog('API 返回的房間數據無效。');
+                }
+            } catch (error) {
+                addToLog(`獲取房間列表 API 錯誤: ${error.message}`, 'error');
+                updateRoomList({}); // 出錯時也清空
+            }
+        }
+
+
         function updateRoomList(rooms) {
             roomListDiv.innerHTML = ''; 
-            if (!rooms || Object.keys(rooms).length === 0) { // 增加對 rooms 的檢查
+            if (!rooms || Object.keys(rooms).length === 0) { 
                 roomListDiv.innerHTML = '<p>目前沒有可加入的房間。</p>';
                 return;
             }
@@ -252,199 +282,134 @@
                 const roomItem = document.createElement('div');
                 roomItem.classList.add('room-list-item');
                 roomItem.innerHTML = `
-                    <span>房間 ID: ${roomId} (遊戲: ${gameType})</span>
-                    <button class="join-room-btn" data-roomid="${roomId}">加入房間</button>
+                    <span>房間 ID: ${roomId} (遊戲: ${gameType === 'texas_holdem' ? '德州撲克' : gameType === 'black_jack' ? '21點' : gameType})</span>
+                    <button class="join-room-btn" data-roomid="${roomId}" data-gametype="${gameType}">加入房間</button>
                 `;
                 roomListDiv.appendChild(roomItem);
             }
             document.querySelectorAll('.join-room-btn').forEach(button => {
-                button.addEventListener('click', (event) => {
+                button.addEventListener('click', async (event) => {
                     const roomIdToJoin = event.target.dataset.roomid;
-                    if (!currentPlayerName){ // 確保有名字才能加入
-                        alert("請先在連線設定中輸入您的名字並點擊 '連線並進入大廳'。");
+                    // const gameTypeToJoin = event.target.dataset.gametype; // 可選
+                    if (!currentPlayerName || !myLocalSid){ 
+                        alert("請先在連線設定中輸入您的名字並連接。");
                         showView('connection');
                         return;
                     }
-                    socket.emit('join_room_request', { room_id: roomIdToJoin, player_name: currentPlayerName });
+                    addToLog(`嘗試加入房間 ${roomIdToJoin} (API)...`);
+                    try {
+                        const response = await fetch(`/api/rooms/${roomIdToJoin}/join`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ sid: myLocalSid, player_name: currentPlayerName })
+                        });
+                        const result = await response.json();
+                        if (result.success) {
+                            addToLog(`API 加入房間成功: ${result.message}`);
+                            // 後端會在成功加入後透過 socket.emit('joined_room_success_socket_event', ...)
+                            // 和 game_instance.broadcast_state(specific_sid=sid) 來觸發客戶端更新
+                        } else {
+                            alert(`加入房間失敗: ${result.message}`);
+                            addToLog(`API 加入房間失敗: ${result.message}`, 'error');
+                        }
+                    } catch (error) {
+                        alert(`加入房間 API 請求錯誤: ${error.message}`);
+                        addToLog(`加入房間 API 請求錯誤: ${error.message}`, 'error');
+                    }
                 });
             });
         }
-        
+
         function updateGameView(gameState) {
             if (!gameState) {
                 addToLog("收到空的遊戲狀態", "error");
                 return;
             }
             currentGameStateForClient = gameState; 
-
             currentGameType = gameState.game_type;
-            currentRoomId = gameState.room_id || currentRoomId; // 更新 currentRoomId
-            roomTitleH2.textContent = `遊戲房間: ${currentRoomId} (類型: ${currentGameType})`;
-            currentGamePhaseDisplay.textContent = gameState.game_phase || '等待開始';
-            potDisplay.textContent = gameState.pot || 0;
+            currentRoomId = gameState.room_id || currentRoomId; 
+            
+            updateGameSpecificUI(currentGameType); // 根據遊戲類型切換UI元素
 
-            // 顯示正確的遊戲相關UI
-            if (currentGameType === 'texas_holdem') {
-                texasHoldemState.classList.remove('hidden');
-                blackJackState.classList.add('hidden');
-                texasHoldemActions.classList.remove('hidden');
-                blackJackActions.classList.add('hidden');
-                myPointsDisplay.classList.add('hidden');
-                
+            roomTitleH2.textContent = `遊戲房間: ${currentRoomId} (類型: ${currentGameType === 'texas_holdem' ? '德州撲克' : currentGameType === 'black_jack' ? '21點' : currentGameType})`;
+            
+            // 通用輪到誰
+            let currentTurnPlayerName = '---';
+            if (gameState.players && Array.isArray(gameState.players)) {
+                 const turnPlayer = gameState.players.find(p => p.sid === gameState.current_turn_sid);
+                 if (turnPlayer) currentTurnPlayerName = turnPlayer.name || '未知玩家';
+            }
+            currentPlayerTurnDisplay.textContent = currentTurnPlayerName; // 德撲用，21點可能不需要這個欄位
+
+            if (gameState.game_type === 'texas_holdem') {
+                document.getElementById('currentGamePhase').textContent = gameState.game_phase || '等待開始';
+                potDisplay.textContent = gameState.pot || 0;
                 communityCardsDisplay.textContent = gameState.community_cards && gameState.community_cards.length > 0 ?
                     gameState.community_cards.map(c => `${c.rank}${c.suit}`).join(' ') : '---';
                 currentBetToMatchDisplay.textContent = gameState.current_street_bet_to_match || 0; 
                 minRaiseIncrementDisplay.textContent = gameState.min_next_raise_increment || 0; 
-
-                const me = gameState.players.find(p => p.sid === mySid); 
+                const me = gameState.players.find(p => p.sid === myLocalSid); 
                 if (me && me.hand && me.hand.length > 0) {
                     myHandDisplay.textContent = me.hand.map(c => `${c.rank}${c.suit}`).join(' ');
                 } else {
                     myHandDisplay.textContent = '---';
                 }
-                
-                // 德州撲克特定的按鈕顯示/隱藏邏輯
-                const texasButtons = texasHoldemActions.querySelectorAll('button');
-                texasButtons.forEach(btn => btn.disabled = true);
-                
-                const isMyTurn = gameState.current_turn_sid === mySid;
-                if (isMyTurn && gameState.is_game_in_progress) {
-                    actionAmountInput.disabled = false;
-                    
-                    // 根據遊戲狀態啟用適當的按鈕
-                    const availableActions = gameState.available_actions || [];
-                    texasButtons.forEach(btn => {
-                        const action = btn.getAttribute('data-action');
-                        if (availableActions.includes(action)) {
-                            btn.disabled = false;
-                        }
-                    });
-                    
-                    // 如果沒有可用的動作指示，則根據遊戲階段啟用通用的按鈕
-                    if (availableActions.length === 0) {
-                        if (gameState.game_phase === 'pre-flop' || 
-                            gameState.game_phase === 'flop' || 
-                            gameState.game_phase === 'turn' || 
-                            gameState.game_phase === 'river') {
-                            
-                            const currentBetToMatch = gameState.current_street_bet_to_match || 0;
-                            const myBetInStreet = me?.bet_in_current_street || 0;
-                            
-                            // 棄牌按鈕總是可用的
-                            texasButtons.forEach(btn => {
-                                if (btn.getAttribute('data-action') === 'fold') 
-                                    btn.disabled = false;
-                            });
-                            
-                            // 如果沒有需要跟注的金額，可以過牌或下注
-                            if (currentBetToMatch <= myBetInStreet) {
-                                texasButtons.forEach(btn => {
-                                    if (btn.getAttribute('data-action') === 'check' || 
-                                        btn.getAttribute('data-action') === 'bet')
-                                        btn.disabled = false;
-                                });
-                            } else {
-                                // 否則可以跟注或加注
-                                texasButtons.forEach(btn => {
-                                    if (btn.getAttribute('data-action') === 'call' || 
-                                        btn.getAttribute('data-action') === 'raise')
-                                        btn.disabled = false;
-                                });
-                            }
-                        }
-                    }
-                } else {
-                    actionAmountInput.disabled = true;
-                }
-                
-            } else if (currentGameType === 'black_jack') {
-                texasHoldemState.classList.add('hidden');
-                blackJackState.classList.remove('hidden');
-                texasHoldemActions.classList.add('hidden');
-                blackJackActions.classList.remove('hidden');
-                myPointsDisplay.classList.remove('hidden');
-                
-                // 更新莊家牌
-                if (gameState.dealer && gameState.dealer.hand) {
-                    dealerCardsDisplay.textContent = gameState.dealer.hand.map(c => `${c.rank}${c.suit}`).join(' ');
-                    dealerPointsDisplay.textContent = gameState.dealer.hand_value || '?';
-                } else {
-                    dealerCardsDisplay.textContent = '---';
-                    dealerPointsDisplay.textContent = '0';
-                }
-                
-                // 更新自己的牌
-                const me = gameState.players.find(p => p.sid === mySid);
-                if (me && me.hand && me.hand.length > 0) {
-                    myHandDisplay.textContent = me.hand.map(c => `${c.rank}${c.suit}`).join(' ');
-                    myPointsDisplay.textContent = `我的點數: ${me.hand_value || 0}`;
+            } else if (gameState.game_type === 'black_jack') {
+                // 更新21點特定的狀態顯示
+                document.getElementById('bjGamePhase').textContent = gameState.game_phase || '等待下注'; // 假設21點有自己的階段ID
+                dealerHandDisplay.textContent = gameState.dealer_hand_display || '---'; // 例如 'A?, K'
+                bjPlayerStatusDisplay.textContent = gameState.player_status_message || '---'; // 例如 '你的點數: 18' 或 '爆牌!'
+                const me = gameState.players.find(p => p.sid === myLocalSid);
+                if (me && me.hands && me.hands[0] && me.hands[0].cards) { // 21點可能有多手牌
+                     myHandDisplay.textContent = me.hands[0].cards.map(c => `${c.rank}${c.suit}`).join(' ') + ` (點數: ${me.hands[0].value || ''})`;
                 } else {
                     myHandDisplay.textContent = '---';
-                    myPointsDisplay.textContent = '我的點數: 0';
                 }
-                
-                // 根據遊戲階段顯示/隱藏按鈕
-                const blackJackButtons = blackJackActions.querySelectorAll('button');
-                blackJackButtons.forEach(btn => btn.classList.add('hidden'));
-                
-                const isMyTurn = gameState.current_turn_sid === mySid;
-                const canAct = gameState.can_act === true;
-                
-                if (gameState.game_phase === 'betting' && isMyTurn && !me.has_acted_this_round) {
-                    blackJackActions.querySelector('[data-action="bet"]').classList.remove('hidden');
-                } else if (gameState.game_phase === 'player_turns' && isMyTurn) {
-                    blackJackActions.querySelector('[data-action="hit"]').classList.remove('hidden');
-                    blackJackActions.querySelector('[data-action="stand"]').classList.remove('hidden');
-                    if (me && me.hand && me.hand.length === 2 && !me.has_doubled_down) {
-                        blackJackActions.querySelector('[data-action="double"]').classList.remove('hidden');
-                    }
-                } else if (gameState.game_phase === 'insurance' && isMyTurn && !me.has_insurance) {
-                    blackJackActions.querySelector('[data-action="insurance"]').classList.remove('hidden');
-                    blackJackActions.querySelector('[data-action="decline_insurance"]').classList.remove('hidden');
-                }
-                
-                // 禁用按鈕如果不是我的回合
-                blackJackButtons.forEach(btn => {
-                    if (!btn.classList.contains('hidden')) {
-                        btn.disabled = !canAct;
-                    }
-                });
-                actionAmountInput.disabled = !canAct;
             }
 
+
             playersDisplayDiv.innerHTML = '<h3>玩家列表</h3>';
-            let currentTurnPlayerName = '---';
             if (gameState.players && Array.isArray(gameState.players)) {
                 gameState.players.forEach(player => {
                     const playerDiv = document.createElement('div');
                     playerDiv.classList.add('player-info');
-                    
-                    let playerText = `${player.name || '未知玩家'} (籌碼: ${player.chips})`;
-                    
-                    if (currentGameType === 'texas_holdem') {
-                        playerText += `, 本街道下注: ${player.bet_in_current_street || 0}`;
-                        if (!player.is_active_in_round && gameState.is_game_in_progress) playerText += " (已棄牌/旁觀)";
-                        if (player.is_all_in) playerText += " (All-in)";
-                    } else if (currentGameType === 'black_jack') {
-                        playerText += `, 下注: ${player.bet || 0}`;
-                        if (player.is_busted) playerText += " (爆牌)";
-                        if (player.has_blackjack) playerText += " (21點)";
-                        if (player.has_doubled_down) playerText += " (已加倍)";
-                        if (player.has_insurance) playerText += " (已投保)";
-                        if (player.has_acted_this_round) playerText += " (已行動)";
+                    let playerText = `${player.name || '未知玩家'} (籌碼: ${player.chips !== undefined ? player.chips : 'N/A'})`;
+                    if (gameState.game_type === 'texas_holdem') {
+                         playerText += `, 本街道下注: ${player.bet_in_current_street || 0}`;
+                         if (!player.is_active_in_round && gameState.is_game_in_progress) playerText += " (已棄牌/旁觀)";
+                         if (player.is_all_in) playerText += " (All-in)";
+                    } else if (gameState.game_type === 'black_jack') {
+                        playerText += `, 下注: ${player.current_bet || 0}`;
+                        if (player.status) playerText += ` (${player.status})`; // 例如 (Busted), (Stand)
                     }
 
                     if (player.sid === gameState.current_turn_sid) { 
                         playerDiv.classList.add('current-turn');
-                        currentTurnPlayerName = player.name || '未知玩家';
                     }
                     playerDiv.textContent = playerText;
                     playersDisplayDiv.appendChild(playerDiv);
                 });
             }
-            currentPlayerTurnDisplay.textContent = currentTurnPlayerName;
+            
 
             const gameIsActuallyInProgress = gameState.is_game_in_progress === true;
+            const myTurn = gameState.current_turn_sid === myLocalSid && gameIsActuallyInProgress;
+
+            // 根據遊戲類型啟用對應的操作按鈕
+            if (currentGameType === 'texas_holdem') {
+                texasHoldemActionsDiv.querySelectorAll('button').forEach(btn => btn.disabled = !myTurn);
+                actionAmountInput.disabled = !myTurn;
+            } else if (currentGameType === 'black_jack') {
+                // 21點的按鈕啟用邏輯會更複雜，取決於遊戲階段 (下注、玩家回合等)
+                // 例如：place_bet 只在下注階段可用，hit/stand 在玩家回合可用
+                const bjPhase = gameState.game_phase; // 假設有這個欄位
+                document.querySelector('#blackJackActions button[data-action="place_bet"]').disabled = !(bjPhase === 'betting' && myTurn);
+                document.querySelector('#blackJackActions button[data-action="hit"]').disabled = !(bjPhase === 'player_turn' && myTurn);
+                document.querySelector('#blackJackActions button[data-action="stand"]').disabled = !(bjPhase === 'player_turn' && myTurn);
+                // Double down 和 Split 的邏輯更複雜
+                bjBetAmountInput.disabled = !(bjPhase === 'betting' && myTurn);
+            }
+            
             startGameButton.disabled = gameIsActuallyInProgress; 
 
             if (gameState.message) { 
@@ -452,34 +417,47 @@
             }
         }
 
-
         // --- Socket.IO 事件監聽 ---
         socket.on('connect', () => {
-            mySid = socket.id;
-            mySidDisplay.textContent = mySid;
+            // myLocalSid 會在 'your_sid' 事件中設定
             connectionStatusDisplay.textContent = '已連線!';
             addToLog('成功連接到伺服器。');
+            // 'your_sid' 事件會處理後續邏輯
+        });
 
-            // 只有在手動點擊連接按鈕後，才會進入大廳
-            if (connectButton.textContent === '已連線') {
+        socket.on('your_sid', (data) => { // 監聽從伺服器發來的 SID
+            myLocalSid = data.sid;
+            mySidDisplay.textContent = myLocalSid; // 更新顯示的 SID
+            addToLog(`已獲取 SID: ${myLocalSid}`);
+
+            // 只有在 currentPlayerName 已被設定 (來自 localStorage 或 connectButton 點擊) 時才自動進入大廳
+            if (currentPlayerName && currentPlayerName.trim()) {
+                connectButton.textContent = '已連線';
+                connectButton.disabled = true;
+                playerNameInput.disabled = true;
                 if(lobbyPlayerNameSpan) lobbyPlayerNameSpan.textContent = currentPlayerName;
                 if(gameRoomPlayerNameSpan) gameRoomPlayerNameSpan.textContent = currentPlayerName;
-                showView('lobby');
-                socket.emit('get_lobby_info');
+                showView('lobby'); // 會觸發 fetchLobbyRooms
+            } else {
+                showView('connection');
+                connectButton.disabled = false;
+                playerNameInput.disabled = false;
+                addToLog('請設定您的名稱並點擊連接按鈕。');
             }
-            // 否則保持在連線設定頁面
         });
+
 
         socket.on('disconnect', () => {
             mySidDisplay.textContent = '尚未連線';
             connectionStatusDisplay.textContent = '已斷線!';
             connectButton.textContent = '連線並進入大廳';
             connectButton.disabled = false;
-            playerNameInput.disabled = false; // 允許重新輸入
+            playerNameInput.disabled = false; 
             showView('connection');
             addToLog('與伺服器斷線。', 'error');
             currentRoomId = null;
             currentGameType = null;
+            myLocalSid = null; // 清除 SID
         });
 
         socket.on('message', (data) => {
@@ -489,31 +467,36 @@
             addToLog(`錯誤: ${data.message}`, 'error');
             alert(`錯誤: ${data.message}`);
         });
-        socket.on('lobby_update', (data) => {
-            console.log('Received lobby_update event. Data:', data);
+
+        socket.on('lobby_update', (data) => { // 這個仍然由 Socket.IO 即時更新
+            console.log('Received lobby_update event (Socket.IO). Data:', data);
             if (data && data.rooms) {
                 updateRoomList(data.rooms);
-                addToLog('大廳房間列表已更新。');
-            } else {
-                console.error('Received lobby_update but data or data.rooms is invalid:', data);
-                addToLog('未能正確更新房間列表，收到的數據有問題。', 'error');
-                updateRoomList({});
+                addToLog('大廳房間列表已透過 Socket.IO 更新。');
             }
         });
-        socket.on('room_created', (data) => {
+
+        // 監聽由 API 成功後，伺服器可能發送的 Socket 事件，用於UI轉換和初始狀態加載
+        socket.on('room_created_socket_event', (data) => {
             currentRoomId = data.room_id;
             currentGameType = data.game_type;
-            addToLog(`房間 ${currentRoomId} (${currentGameType}) 創建成功!`);
+            addToLog(`房間 ${currentRoomId} (${currentGameType}) 創建成功 (Socket Event)!`);
             if(gameRoomPlayerNameSpan) gameRoomPlayerNameSpan.textContent = currentPlayerName || "訪客";
             showView('game-room');
+            // 初始狀態應該由 game_instance.broadcast_state(specific_sid=sid) 在API處理器中觸發
+            // 這會導致 <game_type>_update 事件
         });
-        socket.on('joined_room_success', (data) => {
+
+        socket.on('joined_room_success_socket_event', (data) => {
             currentRoomId = data.room_id;
             currentGameType = data.game_type;
-            addToLog(`成功加入房間 ${currentRoomId} (${currentGameType})`);
+            addToLog(`成功加入房間 ${currentRoomId} (${currentGameType}) (Socket Event)!`);
             if(gameRoomPlayerNameSpan) gameRoomPlayerNameSpan.textContent = currentPlayerName || "訪客";
             showView('game-room');
+            // 初始狀態由 API 處理器中的 broadcast_state 觸發
         });
+
+
         socket.on('left_room_success', (data) => {
             addToLog(`已離開房間 ${data.room_id}`);
             currentRoomId = null;
@@ -522,9 +505,10 @@
             showView('lobby');
             myHandDisplay.textContent = '---';
             communityCardsDisplay.textContent = '---';
-            dealerCardsDisplay.textContent = '---';
             playersDisplayDiv.innerHTML = '<h3>玩家列表</h3>';
         });
+
+        // 特定遊戲事件監聽
         socket.on('texas_holdem_update', (gameState) => {
             if (currentRoomId === gameState.room_id || (currentRoomId === null && gameState.room_id)) { 
                 if (currentRoomId === null) currentRoomId = gameState.room_id; 
@@ -532,32 +516,17 @@
                 updateGameView(gameState);
             }
         });
-        socket.on('black_jack_update', (gameState) => {
-            if (currentRoomId === gameState.room_id || (currentRoomId === null && gameState.room_id)) { 
-                if (currentRoomId === null) currentRoomId = gameState.room_id; 
-                addToLog('收到21點遊戲狀態更新。階段: ' + gameState.game_phase + ', 輪到: ' + gameState.current_turn_sid);
-                updateGameView(gameState);
-            }
-        });
         socket.on('texas_holdem_error', (data) => { 
             addToLog(`德州撲克錯誤: ${data.message}`, 'error');
             alert(`遊戲錯誤: ${data.message}`);
         });
-        socket.on('black_jack_error', (data) => { 
-            addToLog(`21點錯誤: ${data.message}`, 'error');
-            alert(`遊戲錯誤: ${data.message}`);
-        });
         socket.on('texas_holdem_game_over', (data) => { 
-            if (currentGameType !== 'texas_holdem') return;
-            
-            addToLog('德州撲克遊戲結束');
+            addToLog('德州撲克遊戲結束 EVENT RECEIVED. Data: ' + JSON.stringify(data));
             gameActionsPanel.querySelectorAll('button').forEach(btn => btn.disabled = true);
             actionAmountInput.disabled = true;
             startGameButton.disabled = false; 
             currentPlayerTurnDisplay.textContent = '遊戲結束';
-            
             updateGameView(data); 
-
             let resultText = "遊戲結束!\n";
             if (data && data.winners && data.winners.length > 0) {
                 data.winners.forEach(winner => {
@@ -571,83 +540,44 @@
                 });
             } else if (data && data.message) { 
                 resultText += data.message;
-            } else if (data && data.game_over_results && data.game_over_results.message) {
-                 resultText += data.game_over_results.message;
-            }
-            else {
+            } else {
                 resultText += "無明確贏家或結果信息。";
             }
             alert(resultText);
         });
         
-        socket.on('black_jack_game_over', (data) => { 
-            if (currentGameType !== 'black_jack') return;
-            
-            addToLog('21點遊戲結束');
-            gameActionsPanel.querySelectorAll('button').forEach(btn => btn.disabled = true);
-            actionAmountInput.disabled = true;
-            startGameButton.disabled = false; 
-            
-            updateGameView(data); 
-
-            let resultText = "遊戲結束!\n\n";
-            
-            // 添加莊家資訊
-            if (data.dealer) {
-                const dealerStatus = data.dealer.is_busted ? "爆牌" : 
-                                    data.dealer.has_blackjack ? "21點" : 
-                                    `點數: ${data.dealer.hand_value}`;
-                resultText += `莊家: ${dealerStatus}\n`;
-                resultText += `莊家手牌: ${data.dealer.hand.map(c => `${c.rank}${c.suit}`).join(' ')}\n\n`;
+        socket.on('black_jack_update', (gameState) => {
+            if (currentRoomId === gameState.room_id || (currentRoomId === null && gameState.room_id)) {
+                if (currentRoomId === null) currentRoomId = gameState.room_id;
+                addToLog('收到21點遊戲狀態更新。階段: ' + gameState.game_phase);
+                updateGameView(gameState);
             }
-            
-            // 添加所有玩家的結果
-            if (data.results) {
-                resultText += "玩家結果:\n";
-                data.players.forEach(player => {
-                    const result = data.results[player.sid];
-                    if (!result) return;
-                    
-                    // 確定結果文字
-                    let outcomeText = "";
-                    switch(result.outcome) {
-                        case 'blackjack': outcomeText = "21點獲勝"; break;
-                        case 'win_dealer_busted': outcomeText = "莊家爆牌，玩家獲勝"; break;
-                        case 'win_higher': outcomeText = "點數較高，玩家獲勝"; break;
-                        case 'push': outcomeText = "平局"; break;
-                        case 'bust': outcomeText = "爆牌，玩家輸"; break;
-                        case 'lose_to_blackjack': outcomeText = "莊家21點，玩家輸"; break;
-                        case 'lose_lower': outcomeText = "點數較低，玩家輸"; break;
-                        default: outcomeText = result.outcome;
-                    }
-                    
-                    // 籌碼變化
-                    const payoutText = result.payout > 0 ? `贏得 ${result.payout}` : 
-                                    result.payout < 0 ? `損失 ${Math.abs(result.payout)}` : 
-                                    "籌碼不變";
-                    
-                    resultText += `${player.name}: ${outcomeText}, ${payoutText}\n`;
-                    resultText += `手牌: ${player.hand.map(c => `${c.rank}${c.suit}`).join(' ')} (點數: ${player.hand_value})\n`;
-                    
-                    // 如果有保險，添加保險結果
-                    if (result.insurance_outcome) {
-                        const insText = result.insurance_outcome === 'win' ? 
-                                      `保險贏得 ${result.insurance_payout}` : 
-                                      `保險損失 ${Math.abs(result.insurance_payout)}`;
-                        resultText += `${insText}\n`;
-                    }
-                    
-                    resultText += `目前籌碼: ${player.chips}\n\n`;
+        });
+        socket.on('black_jack_error', (data) => {
+             addToLog(`21點錯誤: ${data.message}`, 'error');
+            alert(`遊戲錯誤: ${data.message}`);
+        });
+        socket.on('black_jack_game_over', (data) => {
+            addToLog('21點遊戲結束 EVENT RECEIVED. Data: ' + JSON.stringify(data));
+            // 禁用21點操作按鈕
+            document.querySelectorAll('#blackJackActions button').forEach(btn => btn.disabled = true);
+            bjBetAmountInput.disabled = true;
+            startGameButton.disabled = false;
+            // currentPlayerTurnDisplay.textContent = '遊戲結束'; // 21點可能不需要這個
+            updateGameView(data);
+            let resultText = "21點遊戲結束!\n";
+            if (data && data.winners && data.winners.length > 0) {
+                 data.winners.forEach(winner => {
+                    resultText += `贏家: ${winner.name}, 贏得: ${winner.amount_won}. ${winner.reason || ''}\n`;
                 });
-            } else if (data && data.message) { 
+            } else if (data && data.message) {
                 resultText += data.message;
             } else {
-                resultText += "無明確結果信息。";
+                 resultText += "無明確贏家或結果信息。";
             }
-            
-            // 使用對話框顯示結果
             alert(resultText);
         });
+
 
         // --- 按鈕事件綁定 ---
         connectButton.addEventListener('click', () => {
@@ -657,28 +587,24 @@
                 return;
             }
             currentPlayerName = nameEntered;
-            savePlayerNameToStorage(currentPlayerName); // 儲存名稱
+            savePlayerNameToStorage(currentPlayerName); 
 
             if(lobbyPlayerNameSpan) lobbyPlayerNameSpan.textContent = currentPlayerName;
             if(gameRoomPlayerNameSpan) gameRoomPlayerNameSpan.textContent = currentPlayerName;
 
             if (!socket.connected) {
-                connectButton.textContent = '已連線';
-                connectButton.disabled = true;
-                playerNameInput.disabled = true;
                 addToLog('嘗試連接到伺服器...');
-                socket.connect(); // 觸發 'connect' 事件
+                socket.connect(); 
             } else {
-                // 如果已連接 (例如，之前斷線後手動點擊)，但 currentPlayerName 可能剛設定
+                // 如果已連接，但可能 currentPlayerName 剛設定
                 connectButton.textContent = '已連線';
                 connectButton.disabled = true;
                 playerNameInput.disabled = true;
-                showView('lobby');
-                socket.emit('get_lobby_info');
+                showView('lobby'); // 會觸發 fetchLobbyRooms
             }
         });
 
-        createRoomButton.addEventListener('click', () => {
+        createRoomButton.addEventListener('click', async () => {
             const gameType = gameTypeSelect.value;
             let options = {};
             if (gameType === 'texas_holdem') {
@@ -689,24 +615,49 @@
                 };
             } else if (gameType === 'black_jack') {
                 options = {
-                    buy_in: parseInt(document.getElementById('bjBuyIn').value) || 1000,
-                    min_bet: parseInt(document.getElementById('minBet').value) || 10,
-                    max_bet: parseInt(document.getElementById('maxBet').value) || 500,
+                    min_bet: parseInt(document.getElementById('bjMinBet').value) || 10,
+                    max_bet: parseInt(document.getElementById('bjMaxBet').value) || 100,
                 };
             }
-            socket.emit('create_room', {
-                game_type: gameType,
-                player_name: currentPlayerName,
-                options: options
-            });
+
+            if (!currentPlayerName || !myLocalSid) {
+                alert("請先設定名字並連接到伺服器 (獲取SID)。");
+                showView('connection');
+                return;
+            }
+            addToLog(`嘗試創建房間 (API)... 類型: ${gameType}`);
+            try {
+                const response = await fetch('/api/rooms', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        sid: myLocalSid, 
+                        player_name: currentPlayerName, 
+                        game_type: gameType,
+                        options: options 
+                    })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    addToLog(`API 創建房間成功: ${result.message}. 房間 ID: ${result.room_id}`);
+                    // 後端會透過 socket.emit('room_created_socket_event', ...) 來觸發UI轉換
+                } else {
+                    alert(`創建房間失敗: ${result.message}`);
+                    addToLog(`API 創建房間失敗: ${result.message}`, 'error');
+                }
+            } catch (error) {
+                alert(`創建房間 API 請求錯誤: ${error.message}`);
+                addToLog(`創建房間 API 請求錯誤: ${error.message}`, 'error');
+            }
         });
         
+        refreshLobbyButton.addEventListener('click', fetchLobbyRooms); // 刷新按鈕
+
         leaveRoomButton.addEventListener('click', () => {
             if (currentRoomId) {
                 socket.emit('leave_room_request', { room_id: currentRoomId });
             }
         });
-        
         startGameButton.addEventListener('click', () => {
             if (currentRoomId) {
                 socket.emit('start_game_request', { room_id: currentRoomId });
@@ -714,48 +665,67 @@
             }
         });
 
+        // 通用遊戲操作按鈕事件委派 (需要根據遊戲類型調用正確的面板)
+        document.getElementById('game-room-view').addEventListener('click', (event) => {
+            const button = event.target.closest('button[data-action]');
+            if (!button) return;
+
+            const action = button.dataset.action;
+            let payload = {};
+
+            if (currentGameType === 'texas_holdem') {
+                 if (['bet', 'raise'].includes(action)) { 
+                    const amount = parseInt(actionAmountInput.value);
+                    if (isNaN(amount) || (action === 'bet' && amount <=0) || (action === 'raise' && amount <=0) ) { 
+                        alert('請輸入有效的金額!');
+                        return;
+                    }
+                    payload.amount = amount;
+                }
+            } else if (currentGameType === 'black_jack') {
+                if (action === 'place_bet') {
+                    const amount = parseInt(bjBetAmountInput.value);
+                     if (isNaN(amount) || amount <= 0) {
+                        alert('請輸入有效的下注金額!');
+                        return;
+                    }
+                    payload.amount = amount;
+                }
+                // Hit, Stand, Double, Split 通常不需要額外 payload amount
+            }
+            
+            addToLog(`發送操作: ${action} ${payload.amount !== undefined ? '金額: ' + payload.amount : ''}`);
+            socket.emit('game_action', {
+                room_id: currentRoomId,
+                action_type: action, // 後端遊戲邏輯會根據 game_type 區分 action
+                payload: payload
+            });
+        });
+
+
         // --- 初始化 ---
         window.addEventListener('DOMContentLoaded', (event) => {
-            // 嘗試載入名稱，但不自動連接
-            const savedName = loadPlayerNameFromStorage(); 
-            if (savedName) {
-                playerNameInput.value = savedName;
-                addToLog(`已載入儲存的名稱: ${savedName}，請點擊連線按鈕登入`);
+            loadPlayerNameFromStorage(); 
+            showView('connection'); 
+
+            if (currentPlayerName && currentPlayerName.trim()) {
+                addToLog(`偵測到已儲存名稱: ${currentPlayerName}。嘗試自動連接...`);
+                socket.connect(); 
             } else {
-                addToLog("請輸入您的名字並點擊連線按鈕。");
-            }
-            
-            showView('connection'); // 預設顯示連線介面
-            
-            // 禁用自動連接
-            // if (currentPlayerName && currentPlayerName.trim()) {
-            //     addToLog(`偵測到已儲存名稱: ${currentPlayerName}。嘗試自動連接...`);
-            //     socket.connect(); // 如果有名字，嘗試自動連接
-            // } else {
-            //    addToLog("未找到已儲存的玩家名稱，請手動設定並連接。");
-            // }
-            
-            // 切換遊戲選項顯示
-            gameTypeSelect.addEventListener('change', function() {
-                if (this.value === 'texas_holdem') {
-                    texasHoldemOptions.classList.remove('hidden');
-                    blackJackOptions.classList.add('hidden');
-                } else if (this.value === 'black_jack') {
-                    texasHoldemOptions.classList.add('hidden');
-                    blackJackOptions.classList.remove('hidden');
-                }
-            });
-            
-            // 初始化遊戲操作按鈕
-            if (typeof initializeGameActionListeners === 'function') {
-                initializeGameActionListeners();
-                console.log('遊戲操作按鈕已初始化');
-            } else {
-                console.error('未找到initializeGameActionListeners函數，無法初始化遊戲操作按鈕');
+                addToLog("未找到已儲存的玩家名稱，請手動設定並連接。");
             }
         });
+        
+        // 遊戲類型選擇時，顯示對應的選項
+        gameTypeSelect.addEventListener('change', function() {
+            document.getElementById('texas-holdem-options').style.display = this.value === 'texas_holdem' ? 'block' : 'none';
+            document.getElementById('black-jack-options').style.display = this.value === 'black_jack' ? 'block' : 'none';
+        });
+        // 初始根據預設選擇顯示
+        document.getElementById('texas-holdem-options').style.display = gameTypeSelect.value === 'texas_holdem' ? 'block' : 'none';
+        document.getElementById('black-jack-options').style.display = gameTypeSelect.value === 'black_jack' ? 'block' : 'none';
+
 
     </script>
 </body>
 </html>
-
