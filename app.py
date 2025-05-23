@@ -192,11 +192,6 @@ def join_room_api(room_id):
 
     if game_instance.is_game_in_progress and not game_instance.options.get('allow_join_in_progress', False):
         return jsonify({'success': False, 'message': '遊戲正在進行中，不允許新玩家加入。'}), 403
-    if email in game_instance.players:
-        join_room(room_id, sid=sid, namespace='/')
-        game_instance.broadcast_state(specific_sid=sid)
-        return jsonify({'success': True, 'game_type': game_instance.get_game_type(), 'message': '您已在此房間中。'}), 200
-
     join_room(room_id, sid=sid, namespace='/')
     game_instance.add_player(email, {'name': player_name})
 
