@@ -38,7 +38,7 @@ app.config.update(
 # 啟用 CORS
 CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}}, supports_credentials=True)
 
-socketio = SocketIO(app, cors_allowed_origins="http://localhost:5173", logger=True, engineio_logger=True)
+socketio = SocketIO(app, cors_allowed_origins="http://localhost:5173", logger=True, engineio_logger=False)
 
 CLIENT_SECRETS_FILE = "client_secret.json"
 SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile']
@@ -58,6 +58,7 @@ REGISTERED_GAME_LOGIC = {
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # print(session)
         if 'user' not in session:
             return jsonify({'success': False, 'message': '請先登入'}), 401
         return f(*args, **kwargs)
@@ -150,13 +151,21 @@ def create_room_api():
     active_rooms[room_id] = game_instance
     join_room(room_id, sid=sid, namespace='/')
 
-    socketio.emit('lobby_update', {'rooms': {r_id: g.get_game_type() for r_id, g in active_rooms.items()}}, broadcast=True)
-    socketio.emit('room_created_socket_event', {
-        'room_id': room_id,
-        'game_type': game_type,
-        'options': options,
-        'creator_email': email
-    }, room=sid)
+    # 發送 lobby_update 事件給所有連線的客戶端
+    socketio.emit('lobby_update',
+                  {'rooms': {r_id: g.get_game_type() for r_id, g in active_rooms.items()}},
+                  namespace='/')  # 省略 to 參數表示廣播給所有客戶端
+
+    # 發送 room_created_socket_event 給房間創建者（或房間內所有客戶端）
+    socketio.emit('room_created_socket_event',
+                  {
+                      'room_id': room_id,
+                      'game_type': game_type,
+                      'options': options,
+                      'creator_email': email
+                  },
+                  to=sid,  # 發送給創建者的 SID
+                  namespace='/')
 
     game_instance.broadcast_state(specific_sid=sid)
 
@@ -206,15 +215,24 @@ def join_room_api(room_id):
 
 # --- Socket.IO Event Handlers ---
 @socketio.on('connect')
+@login_required
 def handle_connect():
     sid = request.sid
     print(f"客戶端已連接: {sid}")
-    emit('your_sid', {'sid': sid})
+    # emit('your_sid', {'sid': sid})
+    email = session['user']['email']
+    if not email:
+        emit('error_message', {'message': 'Missing email for registration'})
+        return
+    email_to_sid[email] = sid
+    sid_to_email[sid] = email
+    print(f"Registered email {email} to SID {sid}")
 
 @socketio.on('register_email')
-def handle_register_email(data):
+@login_required
+def handle_register_email():
     sid = request.sid
-    email = data.get('email')
+    email = session['user']['email']
 
     if not email:
         emit('error_message', {'message': 'Missing email for registration'})
