@@ -4,3 +4,4 @@ __MACOSX__
 client_secret.json
 *.db
 .DS_Store
+.python-version
