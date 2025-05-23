@@ -203,7 +203,7 @@ def join_room_api(room_id):
     socketio.emit('joined_room_success_socket_event', {
         'room_id': room_id,
         'game_type': game_instance.get_game_type()
-    }, room=sid)
+    }, to=sid)
 
     game_instance.broadcast_state(specific_sid=sid)
 
@@ -260,7 +260,7 @@ def handle_disconnect():
                     game.end_game({"message": "所有玩家已離開，遊戲結束。"})
                     del active_rooms[r_id]
 
-    socketio.emit('lobby_update', {'rooms': {r_id: g.get_game_type() for r_id, g in active_rooms.items()}}, broadcast=True)
+    socketio.emit('lobby_update', {'rooms': {r_id: g.get_game_type() for r_id, g in active_rooms.items()}}, namespace='/')
 
 @socketio.on('leave_room_request')
 def handle_leave_room_request(data):
@@ -286,7 +286,7 @@ def handle_leave_room_request(data):
         if not game.is_game_in_progress:
             del active_rooms[room_id]
 
-    socketio.emit('lobby_update', {'rooms': {r_id: g.get_game_type() for r_id, g in active_rooms.items()}}, broadcast=True)
+    socketio.emit('lobby_update', {'rooms': {r_id: g.get_game_type() for r_id, g in active_rooms.items()}}, namespace='/')
 
 @socketio.on('start_game_request')
 def handle_start_game_request(data):
