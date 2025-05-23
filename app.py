@@ -1,12 +1,18 @@
-import eventlet
-import logging
-from dotenv import load_dotenv
+# import eventlet
+# from dotenv import load_dotenv
 
 # Patch and load configuration first
-eventlet.monkey_patch()
-load_dotenv()
+# eventlet.monkey_patch()
+# load_dotenv()
 
-from flask import Flask, render_template, request, jsonify, session
+from functools import wraps
+import requests
+import logging
+from google_auth_oauthlib.flow import Flow
+from flask_cors import CORS
+import logging
+
+from flask import Flask, redirect, render_template, request, jsonify, session
 from flask_socketio import SocketIO, emit, join_room, leave_room as sio_leave_room
 import uuid
 import os
@@ -14,9 +20,30 @@ import os
 from games.texas_holdem.logic import TexasHoldemGame
 from games.black_jack.logic import BlackJackGame
 
+# 設置日誌
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your_very_secret_multi_game_key!')
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your-secret-key')
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+
+# 配置 session cookie 的安全屬性
+app.config.update(
+    SESSION_COOKIE_SECURE=False,  # 本地使用 HTTP，設為 False；生產環境設為 True
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+)
+
+# 啟用 CORS
+CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}}, supports_credentials=True)
+
+socketio = SocketIO(app, cors_allowed_origins="http://localhost:5173", logger=True, engineio_logger=True)
+
+CLIENT_SECRETS_FILE = "client_secret.json"
+SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile']
+REDIRECT_URI = 'http://localhost:4000/callback'
+FRONTEND_URL = 'http://localhost:5173/'
 
 active_rooms = {}
 email_to_sid = {}
@@ -27,9 +54,73 @@ REGISTERED_GAME_LOGIC = {
     "black_jack": BlackJackGame,
 }
 
+# 登入檢查裝飾器
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user' not in session:
+            return jsonify({'success': False, 'message': '請先登入'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+# Google 登入路由
 @app.route('/')
 def index():
-    return render_template('index.html')
+    if 'user' in session:
+        return redirect(FRONTEND_URL)
+    return '歡迎！<a href="/login">使用 Google 登錄</a>'
+
+@app.route('/login')
+def login():
+    logger.debug("Starting Google OAuth login")
+    try:
+        flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES, redirect_uri=REDIRECT_URI)
+        authorization_url, state = flow.authorization_url(access_type='offline', include_granted_scopes='true')
+        session['state'] = state
+        logger.debug(f"Redirecting to Google auth URL: {authorization_url}")
+        return redirect(authorization_url)
+    except Exception as e:
+        logger.error(f"Login error: {str(e)}")
+        return jsonify({'error': f'Login failed: {str(e)}'}), 500
+
+@app.route('/callback')
+def callback():
+    logger.debug("Handling Google OAuth callback")
+    state = session.get('state')
+    if state != request.args.get('state'):
+        logger.error("State mismatch in callback")
+        return jsonify({'error': 'State does not match'}), 400
+
+    try:
+        flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES, redirect_uri=REDIRECT_URI)
+        flow.fetch_token(authorization_response=request.url)
+        userinfo = requests.get('https://www.googleapis.com/oauth2/v3/userinfo', headers={
+            'Authorization': f'Bearer {flow.credentials.token}'
+        })
+        if userinfo.status_code != 200:
+            logger.error(f"Failed to fetch user info: {userinfo.status_code}")
+            return jsonify({'error': '無法獲取用戶資訊'}), 500
+        user_info = userinfo.json()
+
+        session['user'] = {'email': user_info['email'], 'name': user_info['name']}
+        logger.debug(f"User logged in: {user_info['email']}")
+        return redirect(FRONTEND_URL)
+    except Exception as e:
+        logger.error(f"Callback error: {str(e)}")
+        return jsonify({'error': f'登錄失敗：{str(e)}'}), 500
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    if 'user' in session:
+        email = session['user']['email']
+        session.pop('user', None)
+        logger.debug(f"User {email} logged out")
+    return jsonify({'message': '登出成功'})
+
+@app.route('/user', methods=['GET'])
+@login_required
+def get_user():
+    return jsonify(session['user'])
 
 @app.route('/api/lobby/rooms', methods=['GET'])
 def get_lobby_rooms_api():
@@ -37,10 +128,11 @@ def get_lobby_rooms_api():
     return jsonify(lobby_data), 200
 
 @app.route('/api/rooms', methods=['POST'])
+@login_required
 def create_room_api():
     data = request.get_json()
-    email = data.get('email')
-    player_name = data.get('player_name', f"Player_{email[:4] if email else 'Anon'}")
+    email = session['user']['email']
+    player_name = session['user']['name']
     game_type = data.get('game_type')
     options = data.get('options', {})
 
@@ -78,9 +170,8 @@ def create_room_api():
 
 @app.route('/api/rooms/<room_id>/join', methods=['POST'])
 def join_room_api(room_id):
-    data = request.get_json()
-    email = data.get('email')
-    player_name = data.get('player_name', f"Player_{email[:4] if email else 'Anon'}")
+    email = session['user']['email']
+    player_name = session['user']['name']
 
     if not email or email not in email_to_sid:
         return jsonify({'success': False, 'message': '需要註冊 Email 才能加入房間。'}), 400
@@ -213,4 +304,9 @@ def on_game_action(data):
 
 if __name__ == '__main__':
     print("正在啟動多遊戲 Flask-SocketIO 伺服器...")
-    socketio.run(app, host='0.0.0.0', port=4000, debug=True)
+    try:
+        logger.debug("Starting Flask-SocketIO server on 127.0.0.1:4000")
+        socketio.run(app, host='127.0.0.1', port=4000, debug=True, use_reloader=False)
+    except Exception as e:
+        logger.error(f"Server startup failed: {str(e)}")
+        raise
