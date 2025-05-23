@@ -3,10 +3,6 @@ import random
 import eventlet
 from games.base_game import BaseGame # 假設 BaseGame 在 games 目錄下
 
-# 假設 evaluate_hand 和相關常數已定義或從您的撲克評估模組導入
-# 例如: from your_poker_eval_module import evaluate_hand, HIGH_CARD, RANK_ORDER
-# 為了此程式碼片段的完整性，這裡放置一個極簡的 evaluate_hand 佔位符。
-# **強烈建議您使用之前生成的完整 poker_hand_evaluation artifact 中的 evaluate_hand 實現。**
 from .utils import *
 class TexasHoldemGame(BaseGame):
     def __init__(self, room_id, players_sids, socketio_instance, options=None):
@@ -30,6 +26,10 @@ class TexasHoldemGame(BaseGame):
         self.player_timer_instance_ids = {} # sid: integer_instance_id
         self.ACTION_TIMEOUT_SECONDS = 10 
 
+        self.host_sid = players_sids[0] if players_sids else None
+        if self.host_sid:
+            print(f"[德州撲克房間 {self.room_id}] 房主已設定為: {self.host_sid}")
+
         temp_initial_players = {}
         if players_sids:
             for sid_init in players_sids:
@@ -45,9 +45,7 @@ class TexasHoldemGame(BaseGame):
         self.players = temp_initial_players 
         print(f"[德州撲克房間 {self.room_id}] 遊戲實例已創建。初始玩家: {list(self.players.keys())}, 選項: {self.options}")
 
-    # --- 計時器相關方法 ---
     def _auto_fold_player(self, player_sid_to_fold, expected_instance_id):
-        """當玩家行動超時，此方法被調用以自動棄牌。"""
         print(f"[德州撲克房間 {self.room_id}] _auto_fold_player CALLED for {player_sid_to_fold} with expected_instance_id {expected_instance_id}.")
         current_instance_id_for_player = self.player_timer_instance_ids.get(player_sid_to_fold)
         print(f"    Actual current instance_id for {player_sid_to_fold} is {current_instance_id_for_player}. Current turn: {self.game_state.get('current_turn_sid')}")
@@ -179,6 +177,11 @@ class TexasHoldemGame(BaseGame):
                  self.game_state['player_who_opened_betting_this_street'] = player_sid
 
     def start_game(self, triggering_player_sid=None):
+        if self.host_sid and triggering_player_sid != self.host_sid:
+            self.send_error_to_player(triggering_player_sid, "只有房主才能開始遊戲。")
+            print(f"[德州撲克房間 {self.room_id}] 玩家 {triggering_player_sid} 嘗試開始遊戲，但不是房主 ({self.host_sid})。")
+            return False
+
         if self.is_game_in_progress:
             if triggering_player_sid: self.send_error_to_player(triggering_player_sid, "遊戲已在進行中。")
             return False
@@ -578,9 +581,6 @@ class TexasHoldemGame(BaseGame):
                 if player_to_check_sid in active_sids_for_new_street:
                     new_street_action_order_temp.append(player_to_check_sid)
         else: 
-            # 如果找不到按鈕位或原始順序，則按 active_sids_for_new_street 的現有順序 (可能需要改進)
-            # 這裡的 active_sids_for_new_street 順序可能不是正確的座位順序
-            # 更好的做法是始終依賴一個固定的座位順序來決定翻牌後的行動
             print(f"[德州撲克房間 {self.room_id}] 警告: 未找到按鈕位在原始順序中，或原始順序為空。新街道行動順序可能不準確。")
             new_street_action_order_temp = list(active_sids_for_new_street)
 
