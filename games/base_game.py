@@ -69,20 +69,20 @@ class BaseGame(ABC):
             player_state = self.get_state_for_player(specific_sid)
             if message:
                 player_state['message'] = message
-            self.socketio.emit(event_name, player_state, room=specific_sid)
+            self.socketio.emit(event_name, player_state, to=specific_sid)
         else: # 廣播給房間內所有玩家
             # 確保每個玩家都收到他們應該看到的狀態
             for sid in list(self.players.keys()):
                 player_state = self.get_state_for_player(sid)
                 if message: # 可以附加一個通用訊息
                     player_state['message'] = message
-                self.socketio.emit(event_name, player_state, room=sid)
+                self.socketio.emit(event_name, player_state, to=self.room_id)
         print(f"Game '{self.get_game_type()}' Room '{self.room_id}': State broadcasted via {event_name}.")
 
     def send_error_to_player(self, player_sid, error_message):
         """向特定玩家發送錯誤訊息"""
         error_event_name = f"{self.get_game_type()}_error"
-        self.socketio.emit(error_event_name, {'message': error_message}, room=player_sid)
+        self.socketio.emit(error_event_name, {'message': error_message}, to=player_sid)
         print(f"Game '{self.get_game_type()}' Room '{self.room_id}': Error sent to {player_sid}: {error_message}")
 
     @abstractmethod
