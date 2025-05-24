@@ -24,7 +24,7 @@ class TexasHoldemGame(BaseGame):
 
         self.player_action_timers = {} # sid: eventlet_greenthread_object
         self.player_timer_instance_ids = {} # sid: integer_instance_id
-        self.ACTION_TIMEOUT_SECONDS = 10
+        self.ACTION_TIMEOUT_SECONDS = 100000
 
         self.host_sid = players_sids[0] if players_sids else None
         if self.host_sid:
