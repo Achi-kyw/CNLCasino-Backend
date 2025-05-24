@@ -295,6 +295,7 @@ def handle_start_game_request(data):
 
     game = active_rooms[room_id]
     game.start_game(triggering_player_sid=email)
+    return {'success': True}
 
 @socketio.on('game_action')
 def on_game_action(data):
