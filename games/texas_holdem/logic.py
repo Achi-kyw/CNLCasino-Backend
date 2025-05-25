@@ -41,6 +41,7 @@ class TexasHoldemGame(BaseGame):
                     'is_active_in_round': False,
                     'has_acted_this_street': False,
                     'is_all_in': False,
+                    'disconnected': False
                 }
         self.players = temp_initial_players
         print(f"[德州撲克房間 {self.room_id}] 遊戲實例已創建。初始玩家: {list(self.players.keys())}, 選項: {self.options}")
@@ -134,7 +135,6 @@ class TexasHoldemGame(BaseGame):
             print(f"[德州撲克房間 {self.room_id}] _cleanup_all_timers: 正在嘗試取消玩家 {sid_to_clean} 的計時器。")
             self._cancel_player_action_timer(sid_to_clean)
         print(f"[德州撲克房間 {self.room_id}] _cleanup_all_timers 完成。最終計時器 greenthreads 字典: {list(self.player_action_timers.keys())}")
-    # --- 結束計時器相關方法 ---
 
     def get_game_type(self):
         return "texas_holdem"
@@ -146,19 +146,28 @@ class TexasHoldemGame(BaseGame):
             self.players[player_sid] = {
                 'name': player_name_to_set, 'chips': self.options.get('buy_in', 1000),
                 'hand': [], 'current_bet': 0, 'bet_in_current_street': 0,
-                'is_active_in_round': False, 'has_acted_this_street': False, 'is_all_in': False,
+                'is_active_in_round': False, 'has_acted_this_street': False, 
+                'is_all_in': False, 'disconnected': False, # Add this
             }
             print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name_to_set} ({player_sid}) 新加入。")
             self.broadcast_state(message=f"玩家 {player_name_to_set} 加入了牌桌。")
             return True
         else:
-            if self.players[player_sid].get('name') != player_name_to_set:
-                old_name = self.players[player_sid].get('name')
-                self.players[player_sid]['name'] = player_name_to_set
-                print(f"[德州撲克房間 {self.room_id}] 玩家 {old_name} ({player_sid}) 更新名稱為 {player_name_to_set}。")
+            # Existing player logic
+            original_name = self.players[player_sid].get('name')
+            self.players[player_sid]['name'] = player_name_to_set
+            if self.players[player_sid].get('disconnected'):
+                self.players[player_sid]['disconnected'] = False
+                print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name_to_set} ({player_sid}) 重新連線。")
+                # Player is back, but if a hand was in progress and they folded, they stay folded for that hand.
+                self.broadcast_state(message=f"玩家 {player_name_to_set} ({original_name}) 更新名稱為 {player_name_to_set} 並重新連線。")
+            elif original_name != player_name_to_set :
+                print(f"[德州撲克房間 {self.room_id}] 玩家 {original_name} ({player_sid}) 更新名稱為 {player_name_to_set}。")
+                self.broadcast_state(message=f"玩家 {original_name} 更新名稱為 {player_name_to_set}。")
             else:
                 print(f"[德州撲克房間 {self.room_id}] 玩家 {self.players[player_sid]['name']} ({player_sid}) 已在房間中。")
-            self.broadcast_state(message=f"玩家 {self.players[player_sid]['name']} 已在牌桌。")
+                # Potentially broadcast state if it was just a ping or state request
+                self.broadcast_state(message=f"玩家 {self.players[player_sid]['name']} 已在牌桌。")
             return True
 
     def _post_blind(self, player_sid, blind_amount, is_small_blind=False):
@@ -185,7 +194,7 @@ class TexasHoldemGame(BaseGame):
         if self.is_game_in_progress:
             if triggering_player_sid: self.send_error_to_player(triggering_player_sid, "遊戲已在進行中。")
             return False
-        eligible_player_sids = [sid for sid, data in self.players.items() if data.get('chips', 0) > 0]
+        eligible_player_sids = [sid for sid, data in self.players.items() if data.get('chips', 0) > 0 and not data.get('disconnected', False)] # Modified line
         num_eligible_players = len(eligible_player_sids)
         if num_eligible_players < self.options.get('min_players', 2):
             msg = f"玩家不足。至少需要 {self.options.get('min_players', 2)} 位有籌碼的玩家才能開始。"
@@ -402,50 +411,105 @@ class TexasHoldemGame(BaseGame):
         if player_sid not in self.players:
             print(f"[德州撲克房間 {self.room_id}] 嘗試移除不存在的玩家 {player_sid}。")
             return False
-        player_data_copy = dict(self.players[player_sid])
+        
+        player_data_copy = dict(self.players[player_sid]) 
         player_name = player_data_copy.get('name', f"未知玩家({player_sid[:4]})")
+        print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} ({player_sid}) 正在被移除 (明確離開房間)。")
+
+        self._cancel_player_action_timer(player_sid) 
+
         was_active_in_round = player_data_copy.get('is_active_in_round', False)
         was_current_turn = (self.game_state.get('current_turn_sid') == player_sid)
-        print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} ({player_sid}) 正在被移除。之前狀態: active={was_active_in_round}, turn={was_current_turn}")
-        self._cancel_player_action_timer(player_sid)
-        if self.is_game_in_progress and was_active_in_round:
-             self.players[player_sid]['is_active_in_round'] = False
+        
         if player_sid in self.game_state.get('round_active_players_sids_in_order', []):
             try:
                 self.game_state['round_active_players_sids_in_order'].remove(player_sid)
             except ValueError:
                 print(f"[德州撲克房間 {self.room_id}] 警告: 嘗試從行動順序中移除 {player_sid} 失敗，可能已不在其中。")
-        if player_sid in self.players:
-            del self.players[player_sid]
+        
+        del self.players[player_sid] 
+
+        message_for_broadcast = f"玩家 {player_name} 離開了牌桌。"
+
         if self.is_game_in_progress and was_active_in_round:
-            fold_message = f"玩家 {player_name} 已斷線並棄牌。"
-            print(f"[德州撲克房間 {self.room_id}] {fold_message}")
-            active_players_still_in_round = self._get_active_players_in_round_now()
-            print(f"[德州撲克房間 {self.room_id}] 棄牌後，剩餘活躍玩家: {len(active_players_still_in_round)}")
+            print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} 在遊戲中離開，其行動已被處理或無需處理，因玩家已移除。")
+            message_for_broadcast = f"玩家 {player_name} 已離開並自動棄牌。"
+            
+            active_players_still_in_round = self._get_active_players_in_round_now() 
+            print(f"[德州撲克房間 {self.room_id}] {player_name} 離開後，剩餘活躍玩家: {len(active_players_still_in_round)}")
+
             if len(active_players_still_in_round) == 1:
                 winner_sid = active_players_still_in_round[0]
-                self._award_pot_to_winner(winner_sid, reason=f"因 {player_name} 斷線而成為最後的玩家。")
-                return True
+                self._award_pot_to_winner(winner_sid, reason=f"因 {player_name} 離開而成為最後的玩家。")
+                return True 
             elif len(active_players_still_in_round) < 1:
-                print(f"[德州撲克房間 {self.room_id}] 在 {player_name} 斷線後沒有剩餘活躍玩家。結束牌局。")
+                print(f"[德州撲克房間 {self.room_id}] 在 {player_name} 離開後沒有剩餘活躍玩家。結束牌局。")
                 self.game_state['pot'] = 0
-                self.end_game({'message': "牌局因所有剩餘玩家斷線/棄牌而結束。", 'pot': 0})
-                return True
+                self.end_game({'message': "牌局因所有剩餘玩家離開/棄牌而結束。", 'pot': 0})
+                return True 
             else:
                 if was_current_turn:
-                    print(f"[德州撲克房間 {self.room_id}] 輪到 {player_name} 行動，但他已斷線。推進到下一位玩家。")
-                    self._advance_to_next_player_or_phase(action_message_for_broadcast=fold_message)
+                    print(f"[德州撲克房間 {self.room_id}] 輪到 {player_name} 行動，但他已離開。推進到下一位玩家。")
+                    self._advance_to_next_player_or_phase(action_message_for_broadcast=message_for_broadcast)
                 else:
-                    print(f"[德州撲克房間 {self.room_id}] {player_name} 已斷線，但非其行動輪。遊戲繼續。")
-                    self.broadcast_state(message=fold_message)
+                    print(f"[德州撲克房間 {self.room_id}] {player_name} 已離開，但非其行動輪。遊戲繼續。")
+                    self.broadcast_state(message=message_for_broadcast)
         else:
             print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} 已離開。遊戲未進行或玩家非活躍。")
-            self.broadcast_state(message=f"玩家 {player_name} 離開了牌桌。")
+            self.broadcast_state(message=message_for_broadcast)
+
         if self.get_player_count() == 0 and not self.is_game_in_progress:
             print(f"[德州撲克房間 {self.room_id}] 房間已空且遊戲未進行。發出 ROOM_EMPTY 信號。")
             return "ROOM_EMPTY"
         return True
+    def disconnect_player(self, player_sid):
+        if player_sid not in self.players:
+            print(f"[德州撲克房間 {self.room_id}] 嘗試標記斷線的不存在玩家 {player_sid}。")
+            return False
 
+        player_data = self.players[player_sid]
+        player_name = player_data.get('name', f"未知玩家({player_sid[:4]})")
+        print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} ({player_sid}) 斷線處理開始。")
+
+        self._cancel_player_action_timer(player_sid)
+        player_data['disconnected'] = True 
+
+        was_active_in_round = player_data.get('is_active_in_round', False)
+        was_current_turn = (self.game_state.get('current_turn_sid') == player_sid)
+
+        message_for_broadcast = f"玩家 {player_name} 已斷線。"
+
+        if self.is_game_in_progress and was_active_in_round:
+            print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} 在遊戲中斷線，視為棄牌。")
+            player_data['is_active_in_round'] = False 
+            player_data['has_acted_this_street'] = True 
+
+            message_for_broadcast = f"玩家 {player_name} 已斷線並自動棄牌。"
+            
+            active_players_still_in_round = self._get_active_players_in_round_now()
+            print(f"[德州撲克房間 {self.room_id}] {player_name} 斷線棄牌後，剩餘活躍玩家: {len(active_players_still_in_round)}")
+
+            if len(active_players_still_in_round) == 1:
+                winner_sid = active_players_still_in_round[0]
+                self._award_pot_to_winner(winner_sid, reason=f"因 {player_name} 斷線而成為最後的玩家。")
+                return True 
+            elif len(active_players_still_in_round) < 1:
+                print(f"[德州撲克房間 {self.room_id}] 在 {player_name} 斷線後沒有剩餘活躍玩家。結束牌局。")
+                self.game_state['pot'] = 0 
+                self.end_game({'message': "牌局因所有剩餘玩家棄牌/斷線而結束。", 'pot': 0})
+                return True 
+            else:
+                if was_current_turn:
+                    print(f"[德州撲克房間 {self.room_id}] 輪到 {player_name} 行動，但他已斷線。推進到下一位玩家。")
+                    self._advance_to_next_player_or_phase(action_message_for_broadcast=message_for_broadcast)
+                else:
+                    print(f"[德州撲克房間 {self.room_id}] {player_name} 已斷線，但非其行動輪。遊戲繼續。")
+                    self.broadcast_state(message=message_for_broadcast)
+        else:
+            print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} 已斷線。遊戲未進行或玩家非活躍於本局。")
+            self.broadcast_state(message=message_for_broadcast)
+        
+        return True
     def _get_active_players_in_round_now(self):
         return [sid for sid, p_data in self.players.items() if p_data.get('is_active_in_round', False)]
 
@@ -846,6 +910,7 @@ class TexasHoldemGame(BaseGame):
                 'is_active_in_round': p_data.get('is_active_in_round', False),
                 'is_all_in': p_data.get('is_all_in', False),
                 'has_acted_this_street': p_data.get('has_acted_this_street', False),
+                'disconnected': p_data.get('disconnected', False), # Add this line
                 'hand': []
             }
             if sid_loop == player_sid and self.is_game_in_progress:

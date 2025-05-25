@@ -213,50 +213,100 @@ def join_room_api(room_id):
 @login_required
 def handle_connect():
     sid = request.sid
-    print(f"客戶端已連接: {sid}")
-    # emit('your_sid', {'sid': sid})
-    email = session['user']['email']
-    if not email:
-        emit('error_message', {'message': 'Missing email for registration'})
+    if 'user' not in session or 'email' not in session['user']:
+        logger.error(f"User or email not in session for SID {sid} during connect despite @login_required.")
+        emit('error_message', {'message': 'Authentication error on connect. User email not found.'})
         return
+    email = session['user']['email']
+    player_name = session['user'].get('name', 'Unknown Player')
+    logger.info(f"Client connected: SID={sid}, Email={email}")
+    old_sid_for_email = email_to_sid.get(email)
+    if old_sid_for_email and old_sid_for_email != sid:
+        logger.info(f"Email {email} reconnected with new SID {sid}. Old SID was {old_sid_for_email}.")
+        sid_to_email.pop(old_sid_for_email, None)
+    
     email_to_sid[email] = sid
     sid_to_email[sid] = email
-    print(f"Registered email {email} to SID {sid}")
+    logger.debug(f"Updated mappings: email_to_sid[{email}] = {sid}, sid_to_email[{sid}] = {email}")
+
+    rejoined_a_room = False
+    for room_id, game in active_rooms.items():
+        if email in game.players:
+            logger.info(f"User {email} was in room {room_id}. Attempting to rejoin with new SID {sid}.")
+            join_room(room_id, sid=sid, namespace='/') 
+            if email in game.players and isinstance(game.players[email], dict):
+                game.players[email]['name'] = player_name
+
+            socketio.emit('rejoined_room_success_socket_event', {
+                'room_id': room_id,
+                'game_type': game.get_game_type(),
+                'message': f"歡迎回來！已重新加入房間 {room_id}。"
+            }, to=sid)
+
+            game.broadcast_state(specific_sid=sid)
+            rejoined_a_room = True
+            # If a user can only be in one room at a time, you might break here.
+            # break
+
+    if rejoined_a_room:
+        logger.info(f"User {email} (SID: {sid}) automatically rejoined their active game(s).")
+    else:
+        logger.info(f"User {email} (SID: {sid}) connected. No active games to rejoin automatically.")
+
 
 @socketio.on('register_email')
 @login_required
 def handle_register_email():
     sid = request.sid
+    if 'user' not in session or 'email' not in session['user']:
+        emit('error_message', {'message': 'Missing user email for registration.'})
+        return
+
     email = session['user']['email']
 
-    if not email:
-        emit('error_message', {'message': 'Missing email for registration'})
-        return
+    old_sid_for_email = email_to_sid.get(email)
+    if old_sid_for_email and old_sid_for_email != sid:
+        sid_to_email.pop(old_sid_for_email, None)
 
     email_to_sid[email] = sid
     sid_to_email[sid] = email
-    print(f"Registered email {email} to SID {sid}")
+    logger.info(f"Explicitly registered email {email} to SID {sid} via 'register_email' event.")
+    emit('email_registered', {'email': email, 'sid': sid})
 
 @socketio.on('disconnect')
 def handle_disconnect():
     sid = request.sid
-    email = sid_to_email.pop(sid, None)
+    email = sid_to_email.pop(sid, None) # Remove current SID from reverse mapping
+
     if email:
-        email_to_sid.pop(email, None)
-    print(f"客戶端已斷線: SID={sid}, Email={email}")
+        if email_to_sid.get(email) == sid:
+            email_to_sid.pop(email, None)
+            logger.info(f"User {email} (SID: {sid}) disconnected. Removed from active SID mapping.")
+        else:
+            logger.info(f"Old SID {sid} for user {email} disconnected. User may have already reconnected with a new SID.")
+    else:
+        logger.info(f"Client disconnected: SID={sid}. No email was actively associated with this SID (or already cleaned up).")
+
+    if not email:
+        return
 
     for r_id, game in list(active_rooms.items()):
         if email in game.players:
-            result = game.remove_player(email)
-            if result == "ROOM_EMPTY" or game.get_player_count() == 0:
+            logger.info(f"Processing disconnect for user {email} in room {r_id}.")
+            result = game.disconnect_player(email)
+            if result == "ROOM_EMPTY" or (hasattr(game, 'get_player_count') and game.get_player_count() == 0):
+                logger.info(f"Room {r_id} is now empty or game logic determined cleanup after {email} left.")
                 if not game.is_game_in_progress:
-                    del active_rooms[r_id]
+                    logger.info(f"Game in room {r_id} was not in progress. Deleting room.")
+                    if r_id in active_rooms: del active_rooms[r_id]
                 else:
-                    game.end_game({"message": "所有玩家已離開，遊戲結束。"})
-                    del active_rooms[r_id]
-
-    socketio.emit('lobby_update', {'rooms': {r_id: g.get_game_type() for r_id, g in active_rooms.items()}}, namespace='/')
-
+                    logger.info(f"Game in room {r_id} was in progress. Ending game and deleting room due to all players leaving.")
+                    if hasattr(game, 'end_game'):
+                        game.end_game({"message": "所有玩家已離開或斷線，遊戲結束。"})
+                    if r_id in active_rooms: del active_rooms[r_id]
+    socketio.emit('lobby_update',
+                  {'rooms': {r_id: g.get_game_type() for r_id, g in active_rooms.items()}},
+                  namespace='/')
 @socketio.on('leave_room_request')
 def handle_leave_room_request(data):
     sid = request.sid
