@@ -54,16 +54,6 @@ REGISTERED_GAME_LOGIC = {
     "black_jack": BlackJackGame,
 }
 
-# 登入檢查裝飾器
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # print(session)
-        if 'user' not in session:
-            return jsonify({'success': False, 'message': '請先登入'}), 401
-        return f(*args, **kwargs)
-    return decorated_function
-
 # Google 登入路由
 @app.route('/')
 def index():
@@ -119,8 +109,9 @@ def logout():
     return jsonify({'message': '登出成功'})
 
 @app.route('/user', methods=['GET'])
-@login_required
 def get_user():
+    if 'user' not in session:
+        return jsonify({'success': False, 'message': '請先登入'}), 401
     return jsonify(session['user'])
 
 @app.route('/api/lobby/rooms', methods=['GET'])
@@ -129,8 +120,9 @@ def get_lobby_rooms_api():
     return jsonify(lobby_data), 200
 
 @app.route('/api/rooms', methods=['POST'])
-@login_required
 def create_room_api():
+    if 'user' not in session:
+        return jsonify({'success': False, 'message': '請先登入'}), 401
     data = request.get_json()
     email = session['user']['email']
     player_name = session['user']['name']
@@ -210,13 +202,13 @@ def join_room_api(room_id):
 
 # --- Socket.IO Event Handlers ---
 @socketio.on('connect')
-@login_required
 def handle_connect():
+    logger.debug(f"Connect attempt with SID={request.sid}, Session={session}")
+    if 'user' not in session:
+        logger.error(f"Connect failed: No user in session for SID={request.sid}")
+        emit('error_message', {'message': '請先登入'})
+        return False  # Disconnect the client explicitly
     sid = request.sid
-    if 'user' not in session or 'email' not in session['user']:
-        logger.error(f"User or email not in session for SID {sid} during connect despite @login_required.")
-        emit('error_message', {'message': 'Authentication error on connect. User email not found.'})
-        return
     email = session['user']['email']
     player_name = session['user'].get('name', 'Unknown Player')
     logger.info(f"Client connected: SID={sid}, Email={email}")
@@ -224,7 +216,7 @@ def handle_connect():
     if old_sid_for_email and old_sid_for_email != sid:
         logger.info(f"Email {email} reconnected with new SID {sid}. Old SID was {old_sid_for_email}.")
         sid_to_email.pop(old_sid_for_email, None)
-    
+
     email_to_sid[email] = sid
     sid_to_email[sid] = email
     logger.debug(f"Updated mappings: email_to_sid[{email}] = {sid}, sid_to_email[{sid}] = {email}")
@@ -233,7 +225,7 @@ def handle_connect():
     for room_id, game in active_rooms.items():
         if email in game.players:
             logger.info(f"User {email} was in room {room_id}. Attempting to rejoin with new SID {sid}.")
-            join_room(room_id, sid=sid, namespace='/') 
+            join_room(room_id, sid=sid, namespace='/')
             if email in game.players and isinstance(game.players[email], dict):
                 game.players[email]['name'] = player_name
 
@@ -245,18 +237,19 @@ def handle_connect():
 
             game.broadcast_state()
             rejoined_a_room = True
-            # If a user can only be in one room at a time, you might break here.
-            # break
 
     if rejoined_a_room:
         logger.info(f"User {email} (SID: {sid}) automatically rejoined their active game(s).")
     else:
         logger.info(f"User {email} (SID: {sid}) connected. No active games to rejoin automatically.")
+    return True  # Explicitly allow the connection
 
 
 @socketio.on('register_email')
-@login_required
 def handle_register_email():
+    if 'user' not in session:
+        return jsonify({'success': False, 'message': '請先登入'}), 401
+
     sid = request.sid
     if 'user' not in session or 'email' not in session['user']:
         emit('error_message', {'message': 'Missing user email for registration.'})
