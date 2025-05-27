@@ -229,13 +229,14 @@ def handle_connect():
             if email in game.players and isinstance(game.players[email], dict):
                 game.players[email]['name'] = player_name
 
+            game.broadcast_state()
+
             socketio.emit('rejoined_room_success_socket_event', {
                 'room_id': room_id,
                 'game_type': game.get_game_type(),
                 'message': f"歡迎回來！已重新加入房間 {room_id}。"
             }, to=sid)
 
-            game.broadcast_state()
             rejoined_a_room = True
 
     if rejoined_a_room:
