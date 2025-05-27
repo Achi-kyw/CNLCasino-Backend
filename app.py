@@ -243,7 +243,7 @@ def handle_connect():
                 'message': f"歡迎回來！已重新加入房間 {room_id}。"
             }, to=sid)
 
-            game.broadcast_state(specific_sid=sid)
+            game.broadcast_state()
             rejoined_a_room = True
             # If a user can only be in one room at a time, you might break here.
             # break

@@ -469,23 +469,19 @@ class TexasHoldemGame(BaseGame):
 
         player_data = self.players[player_sid]
         player_name = player_data.get('name', f"未知玩家({player_sid[:4]})")
-        print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} ({player_sid}) 斷線處理開始。")
 
-        self._cancel_player_action_timer(player_sid)
+        # self._cancel_player_action_timer(player_sid)
         player_data['disconnected'] = True 
-
-        was_active_in_round = player_data.get('is_active_in_round', False)
-        was_current_turn = (self.game_state.get('current_turn_sid') == player_sid)
-
+        
         message_for_broadcast = f"玩家 {player_name} 已斷線。"
-
+        self.broadcast_state(message=message_for_broadcast)
+        '''
         if self.is_game_in_progress and was_active_in_round:
             print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} 在遊戲中斷線，視為棄牌。")
             player_data['is_active_in_round'] = False 
             player_data['has_acted_this_street'] = True 
 
             message_for_broadcast = f"玩家 {player_name} 已斷線並自動棄牌。"
-            
             active_players_still_in_round = self._get_active_players_in_round_now()
             print(f"[德州撲克房間 {self.room_id}] {player_name} 斷線棄牌後，剩餘活躍玩家: {len(active_players_still_in_round)}")
 
@@ -508,6 +504,7 @@ class TexasHoldemGame(BaseGame):
         else:
             print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} 已斷線。遊戲未進行或玩家非活躍於本局。")
             self.broadcast_state(message=message_for_broadcast)
+        '''
         
         return True
     def _get_active_players_in_round_now(self):
