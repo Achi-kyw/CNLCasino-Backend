@@ -24,6 +24,7 @@ class TexasHoldemGame(BaseGame):
         self.game_state['player_who_opened_betting_this_street'] = None
 
         self.player_action_timers = {} # sid: eventlet_greenthread_object
+        self.player_three_second_timers = {}
         self.player_timer_instance_ids = {} # sid: integer_instance_id
 
         self.host_sid = players_sids[0] if players_sids else None
@@ -61,8 +62,6 @@ class TexasHoldemGame(BaseGame):
             player_name = self.players[player_sid]['name']
             print(f"[德州撲克房間 {self.room_id}] 玩家 {player_name} ({player_sid}) 剩餘三秒 (timer_id {expected_instance_id})。")
 
-            self.players[player_sid]['is_active_in_round'] = False
-            self.players[player_sid]['has_acted_this_street'] = True
 
             if player_sid in self.player_action_timers:
                 print(f"[德州撲克房間 {self.room_id}] 從 _timer_countdown (超時執行) 中移除 {player_sid} 的計時器 greenthread 引用。")
@@ -134,12 +133,12 @@ class TexasHoldemGame(BaseGame):
             print(f"[德州撲克房間 {self.room_id}] 為玩家 {player_name} ({player_sid}) 啟動計時器 (ID: {current_instance_id})，時長 {self.game_state['timeout_seconds']} 秒。")
 
             timer_thread = eventlet.spawn_after(
-                self.game_state['timeout_seconds'],
+                self.game_state['timeout_seconds']-3,
                 lambda s=player_sid, inst_id=current_instance_id: self._timer_countdown(s, inst_id)
             )
-            self.player_action_timers[player_sid] = timer_thread
+            self.player_three_second_timers[player_sid] = timer_thread
             timer_thread = eventlet.spawn_after(
-                self.game_state['timeout_seconds']-3,
+                self.game_state['timeout_seconds'],
                 lambda s=player_sid, inst_id=current_instance_id: self._auto_fold_player(s, inst_id)
             )
             self.player_action_timers[player_sid] = timer_thread
