@@ -17,6 +17,7 @@ class TexasHoldemGame(BaseGame):
         self.game_state['dealer_button_idx'] = self.options.get('initial_dealer_idx', -1)
         self.game_state['small_blind'] = self.options.get('small_blind', 10)
         self.game_state['big_blind'] = self.options.get('big_blind', 20)
+        self.game_state['timeout_seconds'] = self.options.get('timeout_seconds', 60)
         self.game_state['min_next_raise_increment'] = self.game_state['big_blind']
         self.game_state['last_raiser_sid'] = None
         self.game_state['round_active_players_sids_in_order'] = []
@@ -24,7 +25,6 @@ class TexasHoldemGame(BaseGame):
 
         self.player_action_timers = {} # sid: eventlet_greenthread_object
         self.player_timer_instance_ids = {} # sid: integer_instance_id
-        self.ACTION_TIMEOUT_SECONDS = 100000
 
         self.host_sid = players_sids[0] if players_sids else None
         if self.host_sid:
@@ -103,10 +103,10 @@ class TexasHoldemGame(BaseGame):
             current_instance_id = self.player_timer_instance_ids.get(player_sid, 0) + 1
             self.player_timer_instance_ids[player_sid] = current_instance_id
 
-            print(f"[德州撲克房間 {self.room_id}] 為玩家 {player_name} ({player_sid}) 啟動計時器 (ID: {current_instance_id})，時長 {self.ACTION_TIMEOUT_SECONDS} 秒。")
+            print(f"[德州撲克房間 {self.room_id}] 為玩家 {player_name} ({player_sid}) 啟動計時器 (ID: {current_instance_id})，時長 {self.game_state['timeout_seconds']} 秒。")
 
             timer_thread = eventlet.spawn_after(
-                self.ACTION_TIMEOUT_SECONDS,
+                self.game_state['timeout_seconds'],
                 lambda s=player_sid, inst_id=current_instance_id: self._auto_fold_player(s, inst_id)
             )
             self.player_action_timers[player_sid] = timer_thread
@@ -472,7 +472,7 @@ class TexasHoldemGame(BaseGame):
 
         # self._cancel_player_action_timer(player_sid)
         player_data['disconnected'] = True 
-        
+
         message_for_broadcast = f"玩家 {player_name} 已斷線。"
         self.broadcast_state(message=message_for_broadcast)
         '''
